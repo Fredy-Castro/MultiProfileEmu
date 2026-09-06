@@ -18,6 +18,10 @@ MVP de escritorio (Windows/Linux) funcional:
 - Sincronizar manualmente un perfil sin cambiar el activo.
 - Navegación por teclado (flechas / Enter / Esc) y por mando XInput-compatible (GLFW), pensada
   para handhelds.
+- Elegir dónde vive la carpeta de datos de la app (primer uso, u "omitir" para usar la carpeta por
+  defecto) y migrarla a otra ubicación después, sin perder nada, desde Configuración.
+- **Modo línea de comandos** para cambiar de perfil sin abrir la ventana — pensado para
+  encadenarse antes de lanzar el emulador (ver "Integración con Steam" abajo).
 
 Android y los presets de rutas por emulador son la siguiente iteración — ver "Roadmap" abajo.
 
@@ -54,6 +58,45 @@ desktopApp/    → punto de entrada de escritorio + empaquetado (Msi/Deb)
 ./gradlew :desktopApp:packageMsi   # Windows
 ./gradlew :desktopApp:packageDeb   # Linux
 ```
+
+## Línea de comandos
+
+El mismo ejecutable, invocado con argumentos, corre en modo headless (sin abrir ventana ni tocar
+GLFW/Compose) y termina casi instantáneamente:
+
+```bash
+MultiProfileEmu list                        # lista grupos y perfiles, marcando el activo con *
+MultiProfileEmu switch "Zelda BOTW" "Dad"    # cambia el perfil activo (nombre o id)
+```
+
+Códigos de salida: `0` éxito (o "ya estaba activo", no-op seguro), `1` grupo/perfil no encontrado,
+`2` error de uso.
+
+### Integración con Steam / Steam ROM Manager
+
+Steam no encadena comandos por sí solo — el campo "Opciones de lanzamiento" solo agrega argumentos
+al ejecutable configurado como destino del acceso directo. Para lograr "sincronizar el perfil y
+después abrir el juego" en un solo click, apuntá el acceso directo a un pequeño script que llame
+primero a `MultiProfileEmu switch` y recién después al emulador real:
+
+**Windows** (`launch-zelda.bat`, destino del acceso directo en Steam):
+```bat
+@echo off
+"C:\Program Files\MultiProfileEmu\MultiProfileEmu.exe" switch "Zelda BOTW" "%USERNAME%"
+if errorlevel 1 exit /b %errorlevel%
+"C:\Emulators\Ryujinx\Ryujinx.exe" %*
+```
+
+**Linux** (`launch-zelda.sh`):
+```bash
+#!/bin/bash
+MultiProfileEmu switch "Zelda BOTW" "$USER" || exit $?
+exec /path/to/ryujinx "$@"
+```
+
+Las "Opciones de lanzamiento" que Steam ROM Manager generó para el emulador (ruta de la ROM, flags,
+etc.) siguen funcionando igual — el script solo las reenvía (`%*` / `"$@"`) después de sincronizar
+el perfil.
 
 ## Tests
 
