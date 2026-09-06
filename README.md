@@ -75,6 +75,28 @@ primera vez, vía la tarea `downloadWix` del plugin de Compose). El instalador r
 `desktopApp/build/compose/binaries/main/msi/MultiProfileEmu-<version>.msi` y se instala en
 `%LOCALAPPDATA%\MultiProfileEmu` — sin pedir privilegios de administrador.
 
+> **Nota sobre `jlink` y LWJGL:** el runtime empaquetado (`createRuntimeImage`) recorta módulos de
+> Java según lo que `jdeps` detecta estáticamente, y no ve el uso reflexivo que LWJGL hace de
+> `sun.misc.Unsafe` — sin `includeAllModules = true` en `nativeDistributions`, la app arranca bien
+> pero el mando falla en silencio (`NoClassDefFoundError` en un hilo de fondo, invisible salvo que
+> redirijas stderr). `./gradlew :desktopApp:run` nunca lo muestra porque corre sobre el JDK
+> completo del sistema, no sobre el runtime recortado — solo aparece en los paquetes finales.
+
+#### AppImage (Linux)
+
+`jpackage` no genera `.AppImage` directamente (solo `deb`/`rpm`/`app-image` sin empaquetar), así
+que hay que envolver el resultado de `createDistributable` a mano con
+[`appimagetool`](https://github.com/AppImage/appimagetool), en una máquina o WSL con Linux real
+(el build tiene que correr en el filesystem nativo de Linux — `/mnt/c/...` desde WSL falla al
+hacer `chmod`):
+
+```bash
+./gradlew :desktopApp:createDistributable
+# arma un AppDir: copiá la salida de build/compose/binaries/main/app/MultiProfileEmu/ a un AppDir/,
+# agregá AppRun (exec bin/MultiProfileEmu), un .desktop, y un ícono en la raíz del AppDir
+appimagetool AppDir MultiProfileEmu-x86_64.AppImage
+```
+
 ### Android
 
 ```bash
