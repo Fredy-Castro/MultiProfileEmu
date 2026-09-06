@@ -51,6 +51,7 @@ fun GroupListScreen(
     actions: Flow<GamepadAction>,
     homeDir: String,
     onMigrateHome: (String) -> String?,
+    supportsHomeMigration: Boolean = true,
     onOpenGroup: (String) -> Unit,
 ) {
     val groups by controller.groups.collectAsState()
@@ -130,6 +131,7 @@ fun GroupListScreen(
         SettingsDialog(
             homeDir = homeDir,
             onMigrate = onMigrateHome,
+            supportsMigration = supportsHomeMigration,
             onDismiss = { showSettingsDialog = false },
         )
     }
@@ -183,7 +185,9 @@ private fun AddGroupDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
                     label = { Text("Carpeta de save activa") },
                     singleLine = true,
                     trailingIcon = {
-                        TextButton(onClick = { pickFolderDialog("Elegí la carpeta de save")?.let { path = it } }) {
+                        TextButton(onClick = {
+                            pickFolderDialog("Elegí la carpeta de save") { chosen -> chosen?.let { path = it } }
+                        }) {
                             Text("Elegir…")
                         }
                     },
@@ -201,7 +205,12 @@ private fun AddGroupDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
 }
 
 @Composable
-private fun SettingsDialog(homeDir: String, onMigrate: (String) -> String?, onDismiss: () -> Unit) {
+private fun SettingsDialog(
+    homeDir: String,
+    onMigrate: (String) -> String?,
+    supportsMigration: Boolean,
+    onDismiss: () -> Unit,
+) {
     var migrationError by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -211,10 +220,14 @@ private fun SettingsDialog(homeDir: String, onMigrate: (String) -> String?, onDi
                 Text("Carpeta de datos actual", style = MaterialTheme.typography.labelLarge)
                 Text(homeDir, style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    "Podés mover toda la configuración y los perfiles guardados a otra carpeta " +
-                        "(por ejemplo, una unidad externa).",
-                )
+                if (supportsMigration) {
+                    Text(
+                        "Podés mover toda la configuración y los perfiles guardados a otra carpeta " +
+                            "(por ejemplo, una unidad externa).",
+                    )
+                } else {
+                    Text("Esta carpeta es privada de la app y no se puede migrar en esta plataforma todavía.")
+                }
                 migrationError?.let { error ->
                     Spacer(Modifier.height(8.dp))
                     Text(error, color = MaterialTheme.colorScheme.error)
@@ -222,11 +235,13 @@ private fun SettingsDialog(homeDir: String, onMigrate: (String) -> String?, onDi
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                pickFolderDialog("Elegí la nueva carpeta de datos", homeDir)?.let { chosen ->
-                    if (chosen != homeDir) migrationError = onMigrate(chosen) else migrationError = null
-                }
-            }) { Text("Migrar a otra carpeta…") }
+            if (supportsMigration) {
+                TextButton(onClick = {
+                    pickFolderDialog("Elegí la nueva carpeta de datos", homeDir) { chosen ->
+                        if (chosen != null && chosen != homeDir) migrationError = onMigrate(chosen)
+                    }
+                }) { Text("Migrar a otra carpeta…") }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
     )

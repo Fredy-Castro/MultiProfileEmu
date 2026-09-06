@@ -18,3 +18,4 @@ rootProject.name = "MultiProfileEmu"
 
 include(":shared")
 include(":desktopApp")
+include(":androidApp")

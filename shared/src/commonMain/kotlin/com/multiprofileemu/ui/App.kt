@@ -43,6 +43,7 @@ fun App(
     gamepad: GamepadController,
     homeDir: String,
     onMigrateHome: (String) -> String?,
+    supportsHomeMigration: Boolean = true,
 ) {
     MaterialTheme {
         Surface {
@@ -85,6 +86,7 @@ fun App(
                         actions = actions,
                         homeDir = homeDir,
                         onMigrateHome = onMigrateHome,
+                        supportsHomeMigration = supportsHomeMigration,
                         onOpenGroup = { route = Route.GroupDetail(it) },
                     )
                     is Route.GroupDetail -> {

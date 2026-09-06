@@ -43,8 +43,9 @@ fun FirstRunHomeScreen(defaultPath: String, onChoose: (String) -> Unit) {
                     Spacer(Modifier.height(24.dp))
                     Row {
                         Button(onClick = {
-                            pickFolderDialog("Elegí la carpeta de datos de MultiProfileEmu", defaultPath)
-                                ?.let(onChoose)
+                            pickFolderDialog("Elegí la carpeta de datos de MultiProfileEmu", defaultPath) { chosen ->
+                                chosen?.let(onChoose)
+                            }
                         }) { Text("Elegir carpeta…") }
                         Spacer(Modifier.width(12.dp))
                         OutlinedButton(onClick = { onChoose(defaultPath) }) { Text("Usar carpeta por defecto") }

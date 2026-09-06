@@ -4,7 +4,7 @@ import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.UIManager
 
-actual fun pickFolderDialog(title: String, initialPath: String?): String? {
+actual fun pickFolderDialog(title: String, initialPath: String?, onResult: (String?) -> Unit) {
     runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
 
     val startDir = initialPath?.let(::File)?.takeIf { it.exists() }
@@ -14,9 +14,10 @@ actual fun pickFolderDialog(title: String, initialPath: String?): String? {
         isAcceptAllFileFilterUsed = false
     }
 
-    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+    val result = if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
         chooser.selectedFile?.absolutePath
     } else {
         null
     }
+    onResult(result)
 }

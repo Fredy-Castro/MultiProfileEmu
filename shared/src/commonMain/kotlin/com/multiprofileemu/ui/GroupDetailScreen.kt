@@ -1,5 +1,6 @@
 package com.multiprofileemu.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -305,7 +307,7 @@ private fun ProfileRow(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Row {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
                 rowActions.forEachIndexed { index, action ->
                     val isSelected = focusedActionIndex == index
                     val enabled = if (action == ProfileAction.SWITCH) switchEnabled else true
