@@ -38,7 +38,12 @@ private sealed interface Route {
  * each screen interprets for list navigation and shortcuts.
  */
 @Composable
-fun App(controller: AppController, gamepad: GamepadController) {
+fun App(
+    controller: AppController,
+    gamepad: GamepadController,
+    homeDir: String,
+    onMigrateHome: (String) -> String?,
+) {
     MaterialTheme {
         Surface {
             var route by remember { mutableStateOf<Route>(Route.GroupList) }
@@ -78,6 +83,8 @@ fun App(controller: AppController, gamepad: GamepadController) {
                     is Route.GroupList -> GroupListScreen(
                         controller = controller,
                         actions = actions,
+                        homeDir = homeDir,
+                        onMigrateHome = onMigrateHome,
                         onOpenGroup = { route = Route.GroupDetail(it) },
                     )
                     is Route.GroupDetail -> {

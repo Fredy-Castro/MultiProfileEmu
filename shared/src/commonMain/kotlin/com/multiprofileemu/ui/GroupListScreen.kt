@@ -12,11 +12,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -30,6 +32,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +49,8 @@ import kotlinx.coroutines.flow.Flow
 fun GroupListScreen(
     controller: AppController,
     actions: Flow<GamepadAction>,
+    homeDir: String,
+    onMigrateHome: (String) -> String?,
     onOpenGroup: (String) -> Unit,
 ) {
     val groups by controller.groups.collectAsState()
@@ -53,6 +58,12 @@ fun GroupListScreen(
     LaunchedEffect(groups.size) { focus.updateItemCount(groups.size) }
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    // LaunchedEffect(actions) below never restarts (its key never changes), so its collector
+    // must read `groups` through a stable rememberUpdatedState — otherwise it keeps closing
+    // over whatever the list looked like when this screen first composed.
+    val currentGroups = rememberUpdatedState(groups)
 
     LaunchedEffect(actions) {
         actions.collect { action ->
@@ -61,7 +72,7 @@ fun GroupListScreen(
                 GamepadAction.NAV_DOWN -> focus.moveDown()
                 GamepadAction.PAGE_UP -> focus.pageUp()
                 GamepadAction.PAGE_DOWN -> focus.pageDown()
-                GamepadAction.CONFIRM -> groups.getOrNull(focus.focusedIndex)?.let { onOpenGroup(it.id) }
+                GamepadAction.CONFIRM -> currentGroups.value.getOrNull(focus.focusedIndex)?.let { onOpenGroup(it.id) }
                 GamepadAction.MENU -> showAddDialog = true
                 else -> Unit
             }
@@ -69,7 +80,16 @@ fun GroupListScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("MultiProfileEmu") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("MultiProfileEmu") },
+                actions = {
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Configuración")
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "Agregar carpeta de saves")
@@ -103,6 +123,14 @@ fun GroupListScreen(
                 controller.addGroup(name, path)
                 showAddDialog = false
             },
+        )
+    }
+
+    if (showSettingsDialog) {
+        SettingsDialog(
+            homeDir = homeDir,
+            onMigrate = onMigrateHome,
+            onDismiss = { showSettingsDialog = false },
         )
     }
 }
@@ -169,5 +197,37 @@ private fun AddGroupDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
             ) { Text("Crear") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
+}
+
+@Composable
+private fun SettingsDialog(homeDir: String, onMigrate: (String) -> String?, onDismiss: () -> Unit) {
+    var migrationError by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Configuración") },
+        text = {
+            Column {
+                Text("Carpeta de datos actual", style = MaterialTheme.typography.labelLarge)
+                Text(homeDir, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Podés mover toda la configuración y los perfiles guardados a otra carpeta " +
+                        "(por ejemplo, una unidad externa).",
+                )
+                migrationError?.let { error ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                pickFolderDialog("Elegí la nueva carpeta de datos", homeDir)?.let { chosen ->
+                    if (chosen != homeDir) migrationError = onMigrate(chosen) else migrationError = null
+                }
+            }) { Text("Migrar a otra carpeta…") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
     )
 }
