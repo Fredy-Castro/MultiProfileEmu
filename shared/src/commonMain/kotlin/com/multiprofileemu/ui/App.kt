@@ -11,6 +11,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -24,6 +25,7 @@ import com.multiprofileemu.app.AppController
 import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.input.GamepadController
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.merge
 
 private sealed interface Route {
@@ -48,8 +50,13 @@ fun App(
     MaterialTheme {
         Surface {
             var route by remember { mutableStateOf<Route>(Route.GroupList) }
+            val busy by controller.busy.collectAsState()
+            // Read via a stable State reference (not the `busy` value itself) so this flow, built
+            // once, still sees up-to-date busy-ness on every action — recreating the flow here on
+            // every busy change would drop whatever screen's LaunchedEffect(actions) was collecting.
+            val busyState = rememberUpdatedState(busy)
             val keyActions = remember { MutableSharedFlow<GamepadAction>(extraBufferCapacity = 8) }
-            val actions = remember { merge(gamepad.actions, keyActions) }
+            val actions = remember { merge(gamepad.actions, keyActions).filter { busyState.value == null } }
             val focusRequester = remember { FocusRequester() }
 
             LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -104,6 +111,8 @@ fun App(
                         }
                     }
                 }
+
+                busy?.let { progress -> BusyOverlay(progress) }
             }
         }
     }

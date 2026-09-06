@@ -28,7 +28,11 @@ class ProfileSwapEngine(
      * Safety: if another profile is currently active, its content is copied back into its
      * own storage *before* the active folder is cleared, so switching away never loses data.
      */
-    fun switchProfile(group: SaveGroup, targetProfileId: String): SaveGroup {
+    fun switchProfile(
+        group: SaveGroup,
+        targetProfileId: String,
+        onProgress: (OperationProgress) -> Unit = {},
+    ): SaveGroup {
         require(group.profiles.any { it.id == targetProfileId }) { "Unknown profile: $targetProfileId" }
 
         val activePath = group.activeFolderPath
@@ -39,13 +43,17 @@ class ProfileSwapEngine(
             val outgoingPath = storage.storagePath(group.id, outgoingId)
             fs.ensureDirectory(outgoingPath)
             fs.clearDirectoryContents(outgoingPath)
-            fs.copyDirectoryContents(activePath, outgoingPath)
+            fs.copyDirectoryContents(activePath, outgoingPath) { done, total ->
+                onProgress(OperationProgress(OperationPhase.BACKING_UP_OUTGOING, done, total))
+            }
         }
 
         val targetPath = storage.storagePath(group.id, targetProfileId)
         fs.ensureDirectory(targetPath)
         fs.clearDirectoryContents(activePath)
-        fs.copyDirectoryContents(targetPath, activePath)
+        fs.copyDirectoryContents(targetPath, activePath) { done, total ->
+            onProgress(OperationProgress(OperationPhase.RESTORING_INCOMING, done, total))
+        }
 
         val now = currentEpochMillis()
         val updatedProfiles = group.profiles.map { profile ->
@@ -58,12 +66,18 @@ class ProfileSwapEngine(
     }
 
     /** Captures whatever is currently in the active folder as a brand-new profile (first-use flow). */
-    fun createProfileFromActive(group: SaveGroup, profileName: String): SaveGroup {
+    fun createProfileFromActive(
+        group: SaveGroup,
+        profileName: String,
+        onProgress: (OperationProgress) -> Unit = {},
+    ): SaveGroup {
         val newProfile = SaveProfile(id = newId(), name = profileName, lastSyncedEpochMs = currentEpochMillis())
         val newPath = storage.storagePath(group.id, newProfile.id)
         fs.ensureDirectory(group.activeFolderPath)
         fs.ensureDirectory(newPath)
-        fs.copyDirectoryContents(group.activeFolderPath, newPath)
+        fs.copyDirectoryContents(group.activeFolderPath, newPath) { done, total ->
+            onProgress(OperationProgress(OperationPhase.CAPTURING, done, total))
+        }
 
         return group.copy(
             profiles = group.profiles + newProfile,
@@ -79,13 +93,19 @@ class ProfileSwapEngine(
     }
 
     /** Manual "back up now" without switching the active profile. */
-    fun syncActiveToProfile(group: SaveGroup, profileId: String): SaveGroup {
+    fun syncActiveToProfile(
+        group: SaveGroup,
+        profileId: String,
+        onProgress: (OperationProgress) -> Unit = {},
+    ): SaveGroup {
         require(group.profiles.any { it.id == profileId }) { "Unknown profile: $profileId" }
         val path = storage.storagePath(group.id, profileId)
         fs.ensureDirectory(path)
         fs.clearDirectoryContents(path)
         fs.ensureDirectory(group.activeFolderPath)
-        fs.copyDirectoryContents(group.activeFolderPath, path)
+        fs.copyDirectoryContents(group.activeFolderPath, path) { done, total ->
+            onProgress(OperationProgress(OperationPhase.SYNCING, done, total))
+        }
 
         val now = currentEpochMillis()
         return group.copy(profiles = group.profiles.map {
@@ -106,14 +126,21 @@ class ProfileSwapEngine(
         )
     }
 
-    fun duplicateProfile(group: SaveGroup, profileId: String, newName: String): SaveGroup {
+    fun duplicateProfile(
+        group: SaveGroup,
+        profileId: String,
+        newName: String,
+        onProgress: (OperationProgress) -> Unit = {},
+    ): SaveGroup {
         val source = group.profiles.first { it.id == profileId }
         val newProfile = source.copy(id = newId(), name = newName, lastSyncedEpochMs = currentEpochMillis())
         val sourcePath = storage.storagePath(group.id, profileId)
         val destPath = storage.storagePath(group.id, newProfile.id)
         fs.ensureDirectory(sourcePath)
         fs.ensureDirectory(destPath)
-        fs.copyDirectoryContents(sourcePath, destPath)
+        fs.copyDirectoryContents(sourcePath, destPath) { done, total ->
+            onProgress(OperationProgress(OperationPhase.DUPLICATING, done, total))
+        }
         return group.copy(profiles = group.profiles + newProfile)
     }
 }

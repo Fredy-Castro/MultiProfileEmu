@@ -77,10 +77,12 @@ private fun runGui() = application {
                     onMigrateHome = { newDir ->
                         val error = appScope.async {
                             try {
-                                homeManager.migrateHomeTo(newDir)
+                                homeManager.migrateHomeTo(newDir) { progress -> controller.reportProgress(progress) }
                                 null
                             } catch (e: Exception) {
                                 e.message ?: "No se pudo migrar la carpeta de datos."
+                            } finally {
+                                controller.reportProgress(null)
                             }
                         }.await()
                         if (error == null) homeDir = newDir

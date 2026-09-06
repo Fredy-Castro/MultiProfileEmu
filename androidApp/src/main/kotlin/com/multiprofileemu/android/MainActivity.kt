@@ -84,10 +84,12 @@ class MainActivity : ComponentActivity() {
                         // Settings mid-copy — then hands the result back via await().
                         val error = activityScope.async {
                             try {
-                                homeManager.migrateHomeTo(encoded)
+                                homeManager.migrateHomeTo(encoded) { progress -> controller.reportProgress(progress) }
                                 null
                             } catch (e: Exception) {
                                 e.message ?: "No se pudo migrar la carpeta de datos."
+                            } finally {
+                                controller.reportProgress(null)
                             }
                         }.await()
                         if (error == null) homeDir = encoded

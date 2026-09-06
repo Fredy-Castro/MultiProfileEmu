@@ -12,8 +12,12 @@ interface FileSystemAdapter {
     /** Deletes every entry inside [path], keeping the directory itself. */
     fun clearDirectoryContents(path: String)
 
-    /** Recursively copies every entry inside [sourcePath] into [destPath] (both must be directories). */
-    fun copyDirectoryContents(sourcePath: String, destPath: String)
+    /**
+     * Recursively copies every entry inside [sourcePath] into [destPath] (both must be directories).
+     * [onProgress] is called once before copying starts (with `filesDone = 0`, so the caller learns
+     * the total immediately) and once after each file is copied.
+     */
+    fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (filesDone: Int, filesTotal: Int) -> Unit = { _, _ -> })
 
     fun sizeOfDirectory(path: String): Long
 

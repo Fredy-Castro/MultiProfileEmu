@@ -1,6 +1,7 @@
 package com.multiprofileemu.app
 
 import com.multiprofileemu.data.AppConfigRepository
+import com.multiprofileemu.domain.OperationProgress
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.util.newId
@@ -41,6 +42,18 @@ class AppController(
     private val _groups = MutableStateFlow(configRepository.loadGroups())
     val groups: StateFlow<List<SaveGroup>> = _groups.asStateFlow()
 
+    // Non-null while a heavy file operation (profile swap, capture, sync, migration...) is in
+    // flight, on this or on any other operation reporting through [reportProgress]. The UI uses
+    // this to show a progress overlay and block touch/gamepad input, since without it users had no
+    // way to tell a switch was still running versus their tap having been dropped.
+    private val _busy = MutableStateFlow<OperationProgress?>(null)
+    val busy: StateFlow<OperationProgress?> = _busy.asStateFlow()
+
+    /** Lets callers outside [AppController] (e.g. home-folder migration) drive the same busy overlay. */
+    fun reportProgress(progress: OperationProgress?) {
+        _busy.value = progress
+    }
+
     private suspend fun runMutation(block: suspend () -> Unit) {
         scope.async { mutex.withLock { block() } }.await()
     }
@@ -51,10 +64,14 @@ class AppController(
     }
 
     private suspend fun updateGroup(groupId: String, transform: (SaveGroup) -> SaveGroup) = runMutation {
-        val updated = withContext(Dispatchers.IO) {
-            _groups.value.map { if (it.id == groupId) transform(it) else it }
+        try {
+            val updated = withContext(Dispatchers.IO) {
+                _groups.value.map { if (it.id == groupId) transform(it) else it }
+            }
+            persist(updated)
+        } finally {
+            _busy.value = null
         }
-        persist(updated)
     }
 
     suspend fun addGroup(name: String, activeFolderPath: String, emulatorHint: String? = null) = runMutation {
@@ -72,16 +89,22 @@ class AppController(
     }
 
     suspend fun switchProfile(groupId: String, profileId: String) =
-        updateGroup(groupId) { swapEngine.switchProfile(it, profileId) }
+        updateGroup(groupId) { group ->
+            swapEngine.switchProfile(group, profileId, onProgress = { progress -> _busy.value = progress })
+        }
 
     suspend fun createProfileFromActive(groupId: String, name: String) =
-        updateGroup(groupId) { swapEngine.createProfileFromActive(it, name) }
+        updateGroup(groupId) { group ->
+            swapEngine.createProfileFromActive(group, name, onProgress = { progress -> _busy.value = progress })
+        }
 
     suspend fun createEmptyProfile(groupId: String, name: String) =
         updateGroup(groupId) { swapEngine.createEmptyProfile(it, name) }
 
     suspend fun syncActiveToProfile(groupId: String, profileId: String) =
-        updateGroup(groupId) { swapEngine.syncActiveToProfile(it, profileId) }
+        updateGroup(groupId) { group ->
+            swapEngine.syncActiveToProfile(group, profileId, onProgress = { progress -> _busy.value = progress })
+        }
 
     suspend fun renameProfile(groupId: String, profileId: String, newName: String) =
         updateGroup(groupId) { swapEngine.renameProfile(it, profileId, newName) }
@@ -90,5 +113,7 @@ class AppController(
         updateGroup(groupId) { swapEngine.deleteProfile(it, profileId) }
 
     suspend fun duplicateProfile(groupId: String, profileId: String, newName: String) =
-        updateGroup(groupId) { swapEngine.duplicateProfile(it, profileId, newName) }
+        updateGroup(groupId) { group ->
+            swapEngine.duplicateProfile(group, profileId, newName, onProgress = { progress -> _busy.value = progress })
+        }
 }

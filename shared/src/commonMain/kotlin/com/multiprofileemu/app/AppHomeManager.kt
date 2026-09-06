@@ -1,5 +1,7 @@
 package com.multiprofileemu.app
 
+import com.multiprofileemu.domain.OperationPhase
+import com.multiprofileemu.domain.OperationProgress
 import com.multiprofileemu.fs.FileSystemAdapter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -51,11 +53,13 @@ class AppHomeManager(
      * Android (SAF) is Binder IPC per file and easily blows past the ANR threshold if run on the
      * caller's (UI) thread.
      */
-    suspend fun migrateHomeTo(newHomeDir: String) = withContext(Dispatchers.IO) {
+    suspend fun migrateHomeTo(newHomeDir: String, onProgress: (OperationProgress) -> Unit = {}) = withContext(Dispatchers.IO) {
         val oldHomeDir = currentHomeDir()
         fs.ensureDirectory(newHomeDir)
         if (oldHomeDir != newHomeDir) {
-            fs.copyDirectoryContents(oldHomeDir, newHomeDir)
+            fs.copyDirectoryContents(oldHomeDir, newHomeDir) { done, total ->
+                onProgress(OperationProgress(OperationPhase.MIGRATING, done, total))
+            }
         }
         setHomeDir(newHomeDir)
     }

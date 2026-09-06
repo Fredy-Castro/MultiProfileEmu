@@ -111,33 +111,51 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         }
     }
 
-    override fun copyDirectoryContents(sourcePath: String, destPath: String) {
+    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit) {
         ensureDirectory(destPath)
         val sourceIsSaf = isSafPath(sourcePath)
         val destIsSaf = isSafPath(destPath)
         when {
             sourceIsSaf && destIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return
-                copyDocToDoc(source, dest)
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return onProgress(0, 0)
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return onProgress(0, 0)
+                val total = countFilesInDoc(source)
+                var done = 0
+                onProgress(0, total)
+                copyDocToDoc(source, dest) { done++; onProgress(done, total) }
             }
             sourceIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return
-                copyDocToFile(source, File(destPath))
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return onProgress(0, 0)
+                val total = countFilesInDoc(source)
+                var done = 0
+                onProgress(0, total)
+                copyDocToFile(source, File(destPath)) { done++; onProgress(done, total) }
             }
             destIsSaf -> {
                 val source = File(sourcePath)
-                if (!source.exists()) return
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return
-                source.listFiles()?.forEach { copyFileToDoc(it, dest) }
+                if (!source.exists()) return onProgress(0, 0)
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return onProgress(0, 0)
+                val total = source.listFiles()?.sumOf { countFilesInFile(it) } ?: 0
+                var done = 0
+                onProgress(0, total)
+                source.listFiles()?.forEach { copyFileToDoc(it, dest) { done++; onProgress(done, total) } }
             }
             else -> {
                 val source = File(sourcePath)
-                if (!source.exists()) return
-                copyFileToFile(source, File(destPath))
+                if (!source.exists()) return onProgress(0, 0)
+                val total = countFilesInFile(source)
+                var done = 0
+                onProgress(0, total)
+                copyFileToFile(source, File(destPath)) { done++; onProgress(done, total) }
             }
         }
     }
+
+    private fun countFilesInFile(file: File): Int =
+        if (file.isDirectory) file.listFiles()?.sumOf { countFilesInFile(it) } ?: 0 else 1
+
+    private fun countFilesInDoc(doc: DocumentFile): Int =
+        if (doc.isDirectory) doc.listFiles().sumOf { countFilesInDoc(it) } else 1
 
     override fun sizeOfDirectory(path: String): Long =
         if (isSafPath(path)) sizeOfDoc(resolveSafDoc(path, createMissingDirs = false)) else sizeOfFile(File(path))
@@ -165,57 +183,61 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         file.writeText(content)
     }
 
-    private fun copyFileToFile(source: File, dest: File) {
+    private fun copyFileToFile(source: File, dest: File, onFileCopied: () -> Unit) {
         if (source.isDirectory) {
             dest.mkdirs()
-            source.listFiles()?.forEach { copyFileToFile(it, File(dest, it.name)) }
+            source.listFiles()?.forEach { copyFileToFile(it, File(dest, it.name), onFileCopied) }
         } else {
             dest.parentFile?.mkdirs()
             source.inputStream().use { input -> dest.outputStream().use { output -> input.copyTo(output) } }
+            onFileCopied()
         }
     }
 
-    private fun copyFileToDoc(source: File, destParent: DocumentFile) {
+    private fun copyFileToDoc(source: File, destParent: DocumentFile, onFileCopied: () -> Unit) {
         if (source.isDirectory) {
             val childDoc = destParent.findFile(source.name)?.takeIf { it.isDirectory }
                 ?: destParent.createDirectory(source.name) ?: return
-            source.listFiles()?.forEach { copyFileToDoc(it, childDoc) }
+            source.listFiles()?.forEach { copyFileToDoc(it, childDoc, onFileCopied) }
         } else {
             destParent.findFile(source.name)?.delete()
             val childDoc = destParent.createFile("application/octet-stream", source.name) ?: return
             context.contentResolver.openOutputStream(childDoc.uri)?.use { output ->
                 source.inputStream().use { input -> input.copyTo(output) }
             }
+            onFileCopied()
         }
     }
 
-    private fun copyDocToFile(source: DocumentFile, destDir: File) {
+    private fun copyDocToFile(source: DocumentFile, destDir: File, onFileCopied: () -> Unit) {
         destDir.mkdirs()
         source.listFiles().forEach { child ->
             val name = child.name ?: return@forEach
             if (child.isDirectory) {
-                copyDocToFile(child, File(destDir, name))
+                copyDocToFile(child, File(destDir, name), onFileCopied)
             } else {
                 context.contentResolver.openInputStream(child.uri)?.use { input ->
                     File(destDir, name).outputStream().use { output -> input.copyTo(output) }
                 }
+                onFileCopied()
             }
         }
     }
 
-    private fun copyDocToDoc(source: DocumentFile, destParent: DocumentFile) {
+    private fun copyDocToDoc(source: DocumentFile, destParent: DocumentFile, onFileCopied: () -> Unit) {
         source.listFiles().forEach { child ->
             val name = child.name ?: return@forEach
             if (child.isDirectory) {
                 val childDest = destParent.findFile(name)?.takeIf { it.isDirectory }
                     ?: destParent.createDirectory(name) ?: return@forEach
-                copyDocToDoc(child, childDest)
+                copyDocToDoc(child, childDest, onFileCopied)
             } else {
                 destParent.findFile(name)?.delete()
                 val childDest = destParent.createFile("application/octet-stream", name) ?: return@forEach
                 context.contentResolver.openInputStream(child.uri)?.use { input ->
                     context.contentResolver.openOutputStream(childDest.uri)?.use { output -> input.copyTo(output) }
                 }
+                onFileCopied()
             }
         }
     }

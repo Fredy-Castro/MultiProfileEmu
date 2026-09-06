@@ -19,11 +19,18 @@ class DesktopFileSystemAdapter : FileSystemAdapter {
         dir.listFiles()?.forEach { it.deleteRecursively() }
     }
 
-    override fun copyDirectoryContents(sourcePath: String, destPath: String) {
+    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit) {
         val sourceRoot = Path.of(sourcePath)
-        if (!Files.exists(sourceRoot)) return
+        if (!Files.exists(sourceRoot)) {
+            onProgress(0, 0)
+            return
+        }
         val destRoot = Path.of(destPath)
         Files.createDirectories(destRoot)
+
+        val total = countFiles(sourceRoot)
+        var done = 0
+        onProgress(0, total)
 
         Files.walk(sourceRoot).use { stream ->
             stream.forEach { source ->
@@ -35,9 +42,16 @@ class DesktopFileSystemAdapter : FileSystemAdapter {
                 } else {
                     Files.createDirectories(target.parent)
                     Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+                    done++
+                    onProgress(done, total)
                 }
             }
         }
+    }
+
+    private fun countFiles(root: Path): Int {
+        if (!Files.exists(root)) return 0
+        Files.walk(root).use { stream -> return stream.filter { Files.isRegularFile(it) }.count().toInt() }
     }
 
     override fun sizeOfDirectory(path: String): Long {
