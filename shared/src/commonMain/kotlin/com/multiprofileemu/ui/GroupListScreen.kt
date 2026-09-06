@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.multiprofileemu.app.AppController
 import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.model.SaveGroup
+import com.multiprofileemu.platform.displayHomeDir
 import com.multiprofileemu.platform.pickFolderDialog
 import kotlinx.coroutines.flow.Flow
 
@@ -218,7 +219,7 @@ private fun SettingsDialog(
         text = {
             Column {
                 Text("Carpeta de datos actual", style = MaterialTheme.typography.labelLarge)
-                Text(homeDir, style = MaterialTheme.typography.bodySmall)
+                Text(displayHomeDir(homeDir), style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(12.dp))
                 if (supportsMigration) {
                     Text(

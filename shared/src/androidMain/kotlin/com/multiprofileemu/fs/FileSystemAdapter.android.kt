@@ -5,33 +5,107 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.multiprofileemu.MultiProfileEmuApplication
 import java.io.File
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 /**
- * Handles two kinds of paths: plain filesystem paths (used for the app's own config + profile
- * snapshots, always private app storage) and SAF tree URIs (`content://...`, used only for
- * `activeFolderPath` — an emulator's save folder living under scoped storage that this app
- * doesn't own). Recursive copy/traversal here follows the same pattern already proven in
- * SaveState-App's BackupManager: stream-copy (never load a whole file into memory) and create
- * SAF files with MIME `application/octet-stream` so the DocumentsProvider doesn't silently
- * append an extension to extensionless save files.
+ * Prefix marking a "SAF child path" — a tree URI plus relative segments appended after it, e.g.
+ * by [com.multiprofileemu.domain.ProfileStorageResolver] doing plain "$root/child" string
+ * concatenation. Naively appending segments straight onto a `content://` URI does not produce a
+ * resolvable path (SAF trees have to be walked via [DocumentFile.findFile]/[DocumentFile.createDirectory],
+ * not addressed by string manipulation), so this encoding keeps the root URI and the relative
+ * segments separate until [AndroidFileSystemAdapter] walks them. Everything above this adapter
+ * (ProfileStorageResolver, AppConfigRepository, AppHomeManager) never needs to know this scheme
+ * exists — to them it's just another opaque path string they can concatenate onto.
+ */
+private const val SAF_CHILD_SCHEME = "safchild://"
+
+/** Wraps a freshly-picked SAF tree URI so it can be used as a home dir (i.e. have paths appended to it). */
+fun encodeSafRoot(treeUri: String): String = "$SAF_CHILD_SCHEME${URLEncoder.encode(treeUri, "UTF-8")}!"
+
+/** Best-effort human-readable label for a [SAF_CHILD_SCHEME]-encoded path, or null if it isn't one. */
+fun prettySafRootLabel(path: String): String? {
+    if (!path.startsWith(SAF_CHILD_SCHEME)) return null
+    val rest = path.removePrefix(SAF_CHILD_SCHEME)
+    val encodedRoot = rest.substringBefore('!')
+    val treeUri = URLDecoder.decode(encodedRoot, "UTF-8")
+    val docId = Uri.parse(treeUri).lastPathSegment?.let { Uri.decode(it) } ?: return treeUri
+    return "Almacenamiento del dispositivo/${docId.substringAfter(':', docId)}"
+}
+
+/**
+ * Handles three kinds of paths: plain filesystem paths (used for the app's own config + profile
+ * snapshots when the data home is app-private storage), bare SAF tree URIs (`content://...`,
+ * always `activeFolderPath` — an emulator's save folder under scoped storage, never has segments
+ * appended to it), and [SAF_CHILD_SCHEME]-encoded paths (used when the data home itself has been
+ * migrated to a SAF folder, so config.json/profile snapshots live under it too).
+ *
+ * Recursive copy/traversal follows the same pattern already proven in SaveState-App's
+ * BackupManager: stream-copy (never load a whole file into memory) and create SAF files with MIME
+ * `application/octet-stream` so the DocumentsProvider doesn't silently append an extension to
+ * extensionless save files.
  */
 class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter {
 
-    private fun isSafUri(path: String) = path.startsWith("content://")
-    private fun safDoc(path: String): DocumentFile? = DocumentFile.fromTreeUri(context, Uri.parse(path))
+    private fun isSafPath(path: String) = path.startsWith("content://") || path.startsWith(SAF_CHILD_SCHEME)
+
+    /** Splits a SAF path into its root tree URI and the relative segments appended after it. */
+    private fun splitSafPath(path: String): Pair<String, List<String>> {
+        if (!path.startsWith(SAF_CHILD_SCHEME)) return path to emptyList()
+        val rest = path.removePrefix(SAF_CHILD_SCHEME)
+        val bang = rest.indexOf('!')
+        val encodedRoot = if (bang >= 0) rest.substring(0, bang) else rest
+        val relative = if (bang >= 0) rest.substring(bang + 1) else ""
+        val root = URLDecoder.decode(encodedRoot, "UTF-8")
+        val segments = relative.split("/").filter { it.isNotEmpty() }
+        return root to segments
+    }
+
+    /** Walks from the tree root through every segment, optionally creating missing directories along the way. */
+    private fun resolveSafDoc(path: String, createMissingDirs: Boolean): DocumentFile? {
+        val (rootUri, segments) = splitSafPath(path)
+        var current: DocumentFile = DocumentFile.fromTreeUri(context, Uri.parse(rootUri)) ?: return null
+        for (segment in segments) {
+            val existing = current.findFile(segment)
+            current = when {
+                existing != null -> existing
+                createMissingDirs -> current.createDirectory(segment) ?: return null
+                else -> return null
+            }
+        }
+        return current
+    }
+
+    /** Like [resolveSafDoc] but stops one segment short, returning (parent dir, leaf name) — for file reads/writes. */
+    private fun resolveSafParent(path: String, createMissingDirs: Boolean): Pair<DocumentFile, String>? {
+        val (rootUri, segments) = splitSafPath(path)
+        if (segments.isEmpty()) return null
+        var current: DocumentFile = DocumentFile.fromTreeUri(context, Uri.parse(rootUri)) ?: return null
+        for (segment in segments.dropLast(1)) {
+            val existing = current.findFile(segment)
+            current = when {
+                existing != null -> existing
+                createMissingDirs -> current.createDirectory(segment) ?: return null
+                else -> return null
+            }
+        }
+        return current to segments.last()
+    }
 
     override fun exists(path: String): Boolean =
-        if (isSafUri(path)) safDoc(path)?.exists() == true else File(path).exists()
+        if (isSafPath(path)) resolveSafDoc(path, createMissingDirs = false)?.exists() == true else File(path).exists()
 
     override fun ensureDirectory(path: String) {
-        // SAF trees already exist by construction (the user picked them via the system picker);
-        // only plain app-storage paths ever need to be created.
-        if (!isSafUri(path)) File(path).mkdirs()
+        if (isSafPath(path)) {
+            resolveSafDoc(path, createMissingDirs = true)
+        } else {
+            File(path).mkdirs()
+        }
     }
 
     override fun clearDirectoryContents(path: String) {
-        if (isSafUri(path)) {
-            safDoc(path)?.listFiles()?.forEach { it.delete() }
+        if (isSafPath(path)) {
+            resolveSafDoc(path, createMissingDirs = false)?.listFiles()?.forEach { it.delete() }
         } else {
             File(path).listFiles()?.forEach { it.deleteRecursively() }
         }
@@ -39,22 +113,22 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
 
     override fun copyDirectoryContents(sourcePath: String, destPath: String) {
         ensureDirectory(destPath)
-        val sourceIsSaf = isSafUri(sourcePath)
-        val destIsSaf = isSafUri(destPath)
+        val sourceIsSaf = isSafPath(sourcePath)
+        val destIsSaf = isSafPath(destPath)
         when {
             sourceIsSaf && destIsSaf -> {
-                val source = safDoc(sourcePath) ?: return
-                val dest = safDoc(destPath) ?: return
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return
                 copyDocToDoc(source, dest)
             }
             sourceIsSaf -> {
-                val source = safDoc(sourcePath) ?: return
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return
                 copyDocToFile(source, File(destPath))
             }
             destIsSaf -> {
                 val source = File(sourcePath)
                 if (!source.exists()) return
-                val dest = safDoc(destPath) ?: return
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return
                 source.listFiles()?.forEach { copyFileToDoc(it, dest) }
             }
             else -> {
@@ -66,15 +140,26 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
     }
 
     override fun sizeOfDirectory(path: String): Long =
-        if (isSafUri(path)) sizeOfDoc(safDoc(path)) else sizeOfFile(File(path))
+        if (isSafPath(path)) sizeOfDoc(resolveSafDoc(path, createMissingDirs = false)) else sizeOfFile(File(path))
 
     override fun readTextFile(path: String): String? {
-        // config.json / location.json are always plain app-storage paths, never SAF.
+        if (isSafPath(path)) {
+            val (parent, leafName) = resolveSafParent(path, createMissingDirs = false) ?: return null
+            val doc = parent.findFile(leafName) ?: return null
+            return context.contentResolver.openInputStream(doc.uri)?.use { it.bufferedReader().readText() }
+        }
         val file = File(path)
         return if (file.exists()) file.readText() else null
     }
 
     override fun writeTextFile(path: String, content: String) {
+        if (isSafPath(path)) {
+            val (parent, leafName) = resolveSafParent(path, createMissingDirs = true) ?: return
+            parent.findFile(leafName)?.delete()
+            val doc = parent.createFile("application/octet-stream", leafName) ?: return
+            context.contentResolver.openOutputStream(doc.uri)?.use { it.write(content.toByteArray()) }
+            return
+        }
         val file = File(path)
         file.parentFile?.mkdirs()
         file.writeText(content)

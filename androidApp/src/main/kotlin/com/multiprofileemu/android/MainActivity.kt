@@ -5,11 +5,18 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.multiprofileemu.app.AppController
+import com.multiprofileemu.app.AppHomeManager
 import com.multiprofileemu.data.AppConfigRepository
 import com.multiprofileemu.domain.ProfileStorageResolver
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.fs.createFileSystemAdapter
+import com.multiprofileemu.fs.encodeSafRoot
 import com.multiprofileemu.input.AndroidGamepadController
 import com.multiprofileemu.platform.AndroidFolderPickerBridge
 import com.multiprofileemu.ui.App
@@ -34,20 +41,46 @@ class MainActivity : ComponentActivity() {
         gamepadController.start()
 
         val fs = createFileSystemAdapter()
-        val homeDir = defaultAppDataDir()
-        fs.ensureDirectory(homeDir)
-        val configRepository = AppConfigRepository(fs, configFilePath = "$homeDir/config.json")
-        val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$homeDir/profiles"))
-        val controller = AppController(configRepository, swapEngine)
+        // Fixed, never-moved location: just enough to remember where the *real* home dir is.
+        // No first-run picker on Android (unlike desktop) — defaults straight to app-private
+        // storage, which always works with zero permission dialogs; migrating to a SAF folder
+        // later is opt-in from Settings.
+        val anchorDir = defaultAppDataDir()
+        val homeManager = AppHomeManager(fs, anchorDir, defaultHomeDir = anchorDir)
 
         setContent {
-            App(
-                controller = controller,
-                gamepad = gamepadController,
-                homeDir = homeDir,
-                onMigrateHome = { "La migración de carpeta todavía no está disponible en Android." },
-                supportsHomeMigration = false,
-            )
+            var homeDir by remember { mutableStateOf(homeManager.currentHomeDir()) }
+
+            // Recreate the whole data layer whenever the home dir changes (a migration) so the
+            // app always reads/writes from the currently active folder.
+            key(homeDir) {
+                val controller = remember(homeDir) {
+                    fs.ensureDirectory(homeDir)
+                    val configRepository = AppConfigRepository(fs, configFilePath = "$homeDir/config.json")
+                    val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$homeDir/profiles"))
+                    AppController(configRepository, swapEngine)
+                }
+
+                App(
+                    controller = controller,
+                    gamepad = gamepadController,
+                    homeDir = homeDir,
+                    onMigrateHome = { newDir ->
+                        try {
+                            // pickFolderDialog always hands back a raw SAF tree URI here; encode it
+                            // so ProfileStorageResolver/AppConfigRepository's plain "$root/child"
+                            // string concatenation keeps working once nested paths are appended.
+                            val encoded = if (newDir.startsWith("content://")) encodeSafRoot(newDir) else newDir
+                            homeManager.migrateHomeTo(encoded)
+                            homeDir = encoded
+                            null
+                        } catch (e: Exception) {
+                            e.message ?: "No se pudo migrar la carpeta de datos."
+                        }
+                    },
+                    supportsHomeMigration = true,
+                )
+            }
         }
     }
 
