@@ -25,6 +25,14 @@ compose.desktop {
             packageName = "MultiProfileEmu"
             packageVersion = "1.0.0"
             description = "Perfiles de save intercambiables para emuladores compartidos en familia"
+
+            windows {
+                // Per-user install: no admin/UAC prompt needed, matches how most consumer desktop
+                // apps install today. Installs to the current user's AppData instead of Program Files.
+                perUserInstall = true
+                menu = true
+                shortcut = true
+            }
         }
     }
 }

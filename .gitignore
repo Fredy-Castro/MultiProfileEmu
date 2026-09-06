@@ -8,3 +8,8 @@ local.properties
 out/
 .DS_Store
 .claude/
+
+# Android release signing — never commit the keystore or its passwords.
+androidApp/keystore.properties
+androidApp/*.jks
+androidApp/*.keystore

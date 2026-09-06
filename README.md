@@ -7,23 +7,26 @@ hacia la carpeta activa del emulador y guarda automáticamente lo que había ant
 
 ## Estado actual
 
-MVP de escritorio (Windows/Linux) funcional:
+Funcional en **Windows, Linux y Android**:
 
-- Crear "grupos" (una carpeta de save activa + sus perfiles).
+- Crear "grupos" (una carpeta de save activa + sus perfiles). En Android la carpeta activa se
+  elige vía SAF (Storage Access Framework), ya que es una carpeta ajena a la app bajo scoped
+  storage.
 - Capturar el contenido actual de una carpeta como el primer perfil (flujo de primer uso, evita
   descartar saves no gestionados).
 - Crear perfiles nuevos (vacíos o duplicando uno existente), renombrar, eliminar.
 - **Cambiar de perfil** con respaldo automático del perfil saliente antes de sobrescribir la
   carpeta activa.
 - Sincronizar manualmente un perfil sin cambiar el activo.
-- Navegación por teclado (flechas / Enter / Esc) y por mando XInput-compatible (GLFW), pensada
-  para handhelds.
-- Elegir dónde vive la carpeta de datos de la app (primer uso, u "omitir" para usar la carpeta por
-  defecto) y migrarla a otra ubicación después, sin perder nada, desde Configuración.
-- **Modo línea de comandos** para cambiar de perfil sin abrir la ventana — pensado para
-  encadenarse antes de lanzar el emulador (ver "Integración con Steam" abajo).
+- Navegación por teclado (flechas / Enter / Esc) y por mando XInput-compatible (GLFW en desktop,
+  `InputManager` en Android), pensada para handhelds.
+- Elegir dónde vive la carpeta de datos de la app (primer uso en desktop, u "omitir" para usar la
+  carpeta por defecto) y migrarla a otra ubicación después sin perder nada, desde Configuración —
+  incluso a una carpeta SAF en Android.
+- **Modo línea de comandos** (solo desktop) para cambiar de perfil sin abrir la ventana — pensado
+  para encadenarse antes de lanzar el emulador (ver "Integración con Steam" abajo).
 
-Android y los presets de rutas por emulador son la siguiente iteración — ver "Roadmap" abajo.
+Presets de rutas por emulador y modo root en Android son la siguiente iteración — ver "Roadmap".
 
 ## Arquitectura
 
@@ -33,18 +36,24 @@ Kotlin Multiplatform + Compose Multiplatform: la lógica de dominio y toda la UI
 ```
 shared/
   commonMain/  → modelos, motor de swap (ProfileSwapEngine), persistencia JSON, UI Compose
-  desktopMain/ → implementaciones concretas: filesystem real, selector de carpeta (Swing),
-                 mando vía GLFW/LWJGL
+  desktopMain/ → filesystem real, selector de carpeta (Swing), mando vía GLFW/LWJGL
+  androidMain/ → filesystem vía SAF + File, selector de carpeta vía ActivityResultLauncher,
+                 mando vía InputManager/KeyEvent
 desktopApp/    → punto de entrada de escritorio + empaquetado (Msi/Deb)
+androidApp/    → punto de entrada Android (MainActivity) + manifest/recursos + keystore de release
 ```
 
 - **`ProfileSwapEngine`** (`shared/.../domain/ProfileSwapEngine.kt`): toda la mecánica de
   cambiar/crear/sincronizar/duplicar perfiles, expresada solo en términos de la interfaz
-  `FileSystemAdapter` — no sabe si está tocando carpetas normales (desktop) o SAF (Android futuro).
-- **Mando**: `GamepadController` (interfaz común) + `DesktopGamepadController` (GLFW), que expone
-  el layout estándar de gamepad (A/B/X/Y, D-Pad, bumpers) sobre XInput en Windows y evdev en Linux.
-- Los datos de la app (config + snapshots de cada perfil) se guardan en
-  `%APPDATA%\MultiProfileEmu` (Windows) o `~/.config/MultiProfileEmu` (Linux).
+  `FileSystemAdapter` — no sabe si está tocando carpetas normales o SAF.
+- **Mando**: `GamepadController` (interfaz común), con `DesktopGamepadController` (GLFW, expone
+  el layout estándar de gamepad sobre XInput en Windows y evdev en Linux) y
+  `AndroidGamepadController` (`InputManager`/`KeyEvent`, alimentado desde
+  `Activity.dispatchKeyEvent`).
+- Los datos de la app (config + snapshots de cada perfil) se guardan por defecto en
+  `%APPDATA%\MultiProfileEmu` (Windows), `~/.config/MultiProfileEmu` (Linux), o el almacenamiento
+  privado de la app (Android) — migrable a cualquier otra carpeta (incluida una SAF en Android)
+  desde Configuración.
 
 ## Cómo correrlo
 
@@ -54,10 +63,46 @@ desktopApp/    → punto de entrada de escritorio + empaquetado (Msi/Deb)
 
 ## Cómo empaquetarlo
 
+### Desktop
+
 ```bash
-./gradlew :desktopApp:packageMsi   # Windows
-./gradlew :desktopApp:packageDeb   # Linux
+./gradlew :desktopApp:packageMsi   # Windows — instalador .msi por usuario (sin admin/UAC)
+./gradlew :desktopApp:packageDeb   # Linux — hay que correrlo *en* Linux, jpackage no cross-compila
 ```
+
+`packageMsi` necesita [WiX Toolset](https://wixtoolset.org/) instalado (o lo descarga solo la
+primera vez, vía la tarea `downloadWix` del plugin de Compose). El instalador resultante queda en
+`desktopApp/build/compose/binaries/main/msi/MultiProfileEmu-<version>.msi` y se instala en
+`%LOCALAPPDATA%\MultiProfileEmu` — sin pedir privilegios de administrador.
+
+### Android
+
+```bash
+./gradlew :androidApp:assembleDebug     # sin firma de release, para probar
+./gradlew :androidApp:assembleRelease   # firmado, listo para instalar/distribuir
+```
+
+El APK de release necesita un keystore local (nunca se commitea a git). Generar uno una sola vez:
+
+```bash
+keytool -genkeypair -v -keystore androidApp/release.jks -alias multiprofileemu \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Y crear `androidApp/keystore.properties` (también gitignored) apuntando a él:
+
+```properties
+storeFile=release.jks
+storePassword=<tu contraseña>
+keyAlias=multiprofileemu
+keyPassword=<tu contraseña>
+```
+
+**Importante:** guardá una copia de `release.jks` y `keystore.properties` en un lugar seguro fuera
+del repo. Si se pierden, cualquier futura versión firmada con un keystore distinto no podrá
+instalarse *sobre* una ya instalada con este — Android lo rechaza como si fuera una app distinta.
+
+El APK queda en `androidApp/build/outputs/apk/release/androidApp-release.apk`.
 
 ## Línea de comandos
 
@@ -82,7 +127,7 @@ primero a `MultiProfileEmu switch` y recién después al emulador real:
 **Windows** (`launch-zelda.bat`, destino del acceso directo en Steam):
 ```bat
 @echo off
-"C:\Program Files\MultiProfileEmu\MultiProfileEmu.exe" switch "Zelda BOTW" "%USERNAME%"
+"%LOCALAPPDATA%\MultiProfileEmu\MultiProfileEmu.exe" switch "Zelda BOTW" "%USERNAME%"
 if errorlevel 1 exit /b %errorlevel%
 "C:\Emulators\Ryujinx\Ryujinx.exe" %*
 ```
@@ -109,9 +154,10 @@ perfil, y cambiar entre ambos verificando que ninguno pierde datos.
 
 ## Roadmap
 
-- **Android**: mismo módulo `shared`, agregando `androidMain` con acceso a carpetas vía SAF
-  (Storage Access Framework) y mando vía `InputManager`/`KeyEvent`, portando los patrones ya
-  probados en [SaveState-App](https://github.com/Matteo842/SaveState-App).
 - **Presets de emuladores**: detectar automáticamente rutas de save típicas de RetroArch,
-  Dolphin, PCSX2, Cemu, Yuzu/Ryujinx, DuckStation, etc. en Windows/Linux.
-- Multi-idioma, theming, ícono de la app, distribución AppImage/Flatpak para Linux.
+  Dolphin, PCSX2, Cemu, Yuzu/Ryujinx, DuckStation, etc., portando los patrones de
+  [SaveState-App](https://github.com/Matteo842/SaveState-App).
+- **Modo root en Android** para paths protegidos bajo `Android/data/...`, portando
+  `RootAccessHelper.kt` de SaveState-App.
+- Multi-idioma, theming, distribución AppImage/Flatpak para Linux, subir a Play Store (necesitaría
+  su propio keystore de upload distinto del de firma local).
