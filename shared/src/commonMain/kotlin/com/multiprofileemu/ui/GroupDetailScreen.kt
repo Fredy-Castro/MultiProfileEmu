@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +45,7 @@ import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.model.SaveProfile
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 
 /** The actions a profile row can expose; which ones apply depends on whether it's the active profile. */
 private enum class ProfileAction(val label: String) {
@@ -69,6 +71,7 @@ fun GroupDetailScreen(
     actions: Flow<GamepadAction>,
     onBack: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val focus = remember(group.id) { FocusListState(group.profiles.size) }
     // Which action button is selected *within* the focused row — resets whenever the focused
     // row changes so left/right always starts from the first action of the new row.
@@ -178,11 +181,11 @@ fun GroupDetailScreen(
                             focused = rowFocused,
                             focusedActionIndex = if (rowFocused) focusedActionIndex else -1,
                             switchEnabled = group.activeProfileId != null,
-                            onSwitch = { controller.switchProfile(group.id, profile.id) },
-                            onSync = { controller.syncActiveToProfile(group.id, profile.id) },
+                            onSwitch = { scope.launch { controller.switchProfile(group.id, profile.id) } },
+                            onSync = { scope.launch { controller.syncActiveToProfile(group.id, profile.id) } },
                             onRename = { pendingDialog = DetailDialog.RenameProfile(profile) },
                             onDuplicate = { pendingDialog = DetailDialog.DuplicateProfile(profile) },
-                            onDelete = { controller.deleteProfile(group.id, profile.id) },
+                            onDelete = { scope.launch { controller.deleteProfile(group.id, profile.id) } },
                         )
                     }
                 }
@@ -198,7 +201,7 @@ fun GroupDetailScreen(
             confirmLabel = "Crear",
             onDismiss = { pendingDialog = null },
             onConfirm = { name ->
-                controller.createEmptyProfile(group.id, name)
+                scope.launch { controller.createEmptyProfile(group.id, name) }
                 pendingDialog = null
             },
         )
@@ -208,7 +211,7 @@ fun GroupDetailScreen(
             confirmLabel = "Capturar",
             onDismiss = { pendingDialog = null },
             onConfirm = { name ->
-                controller.createProfileFromActive(group.id, name)
+                scope.launch { controller.createProfileFromActive(group.id, name) }
                 pendingDialog = null
             },
         )
@@ -219,7 +222,7 @@ fun GroupDetailScreen(
             confirmLabel = "Guardar",
             onDismiss = { pendingDialog = null },
             onConfirm = { name ->
-                controller.renameProfile(group.id, dialog.profile.id, name)
+                scope.launch { controller.renameProfile(group.id, dialog.profile.id, name) }
                 pendingDialog = null
             },
         )
@@ -230,7 +233,7 @@ fun GroupDetailScreen(
             confirmLabel = "Duplicar",
             onDismiss = { pendingDialog = null },
             onConfirm = { name ->
-                controller.duplicateProfile(group.id, dialog.profile.id, name)
+                scope.launch { controller.duplicateProfile(group.id, dialog.profile.id, name) }
                 pendingDialog = null
             },
         )

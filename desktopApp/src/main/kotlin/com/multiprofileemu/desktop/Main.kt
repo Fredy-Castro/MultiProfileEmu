@@ -20,6 +20,10 @@ import com.multiprofileemu.model.SaveProfile
 import com.multiprofileemu.ui.App
 import com.multiprofileemu.ui.FirstRunHomeScreen
 import com.multiprofileemu.util.defaultAppDataDir
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
@@ -34,6 +38,9 @@ private fun runGui() = application {
     // Fixed, never-moved location: just enough to remember where the *real* home dir is.
     val anchorDir = remember { defaultAppDataDir() }
     val homeManager = remember { AppHomeManager(fs, anchorDir, defaultHomeDir = anchorDir) }
+    // Outlives any screen's rememberCoroutineScope() — a migration in flight must finish even if
+    // the user closes the Settings dialog mid-copy. See AppController for the same reasoning.
+    val appScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 
     var homeDir by remember {
         mutableStateOf(if (homeManager.isFirstRun()) null else homeManager.currentHomeDir())
@@ -68,13 +75,16 @@ private fun runGui() = application {
                     gamepad = gamepad,
                     homeDir = resolvedHomeDir,
                     onMigrateHome = { newDir ->
-                        try {
-                            homeManager.migrateHomeTo(newDir)
-                            homeDir = newDir
-                            null
-                        } catch (e: Exception) {
-                            e.message ?: "No se pudo migrar la carpeta de datos."
-                        }
+                        val error = appScope.async {
+                            try {
+                                homeManager.migrateHomeTo(newDir)
+                                null
+                            } catch (e: Exception) {
+                                e.message ?: "No se pudo migrar la carpeta de datos."
+                            }
+                        }.await()
+                        if (error == null) homeDir = newDir
+                        error
                     },
                 )
             }

@@ -21,6 +21,11 @@ import com.multiprofileemu.input.AndroidGamepadController
 import com.multiprofileemu.platform.AndroidFolderPickerBridge
 import com.multiprofileemu.ui.App
 import com.multiprofileemu.util.defaultAppDataDir
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 
 class MainActivity : ComponentActivity() {
 
@@ -30,6 +35,11 @@ class MainActivity : ComponentActivity() {
     // Initialized in onCreate (not as a property initializer): applicationContext is still null
     // during the Activity's constructor — Android only attaches it afterwards, in attachBaseContext.
     private lateinit var gamepadController: AndroidGamepadController
+
+    // Outlives every screen's rememberCoroutineScope() — a migration in flight must finish even
+    // if the user backs out of Settings mid-copy, or it'd leave the pointer and the actual files
+    // out of sync. See AppController for the same reasoning applied to profile swaps.
+    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,17 +76,22 @@ class MainActivity : ComponentActivity() {
                     gamepad = gamepadController,
                     homeDir = homeDir,
                     onMigrateHome = { newDir ->
-                        try {
-                            // pickFolderDialog always hands back a raw SAF tree URI here; encode it
-                            // so ProfileStorageResolver/AppConfigRepository's plain "$root/child"
-                            // string concatenation keeps working once nested paths are appended.
-                            val encoded = if (newDir.startsWith("content://")) encodeSafRoot(newDir) else newDir
-                            homeManager.migrateHomeTo(encoded)
-                            homeDir = encoded
-                            null
-                        } catch (e: Exception) {
-                            e.message ?: "No se pudo migrar la carpeta de datos."
-                        }
+                        // pickFolderDialog always hands back a raw SAF tree URI here; encode it
+                        // so ProfileStorageResolver/AppConfigRepository's plain "$root/child"
+                        // string concatenation keeps working once nested paths are appended.
+                        val encoded = if (newDir.startsWith("content://")) encodeSafRoot(newDir) else newDir
+                        // Runs on activityScope, not the caller's — surviving navigation away from
+                        // Settings mid-copy — then hands the result back via await().
+                        val error = activityScope.async {
+                            try {
+                                homeManager.migrateHomeTo(encoded)
+                                null
+                            } catch (e: Exception) {
+                                e.message ?: "No se pudo migrar la carpeta de datos."
+                            }
+                        }.await()
+                        if (error == null) homeDir = encoded
+                        error
                     },
                     supportsHomeMigration = true,
                 )
@@ -86,6 +101,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         gamepadController.stop()
+        activityScope.cancel()
         super.onDestroy()
     }
 

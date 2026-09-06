@@ -1,6 +1,8 @@
 package com.multiprofileemu.app
 
 import com.multiprofileemu.fs.FileSystemAdapter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -43,8 +45,13 @@ class AppHomeManager(
         fs.writeTextFile(pointerFilePath, json.encodeToString(HomePointer(path)))
     }
 
-    /** Copies everything from the current home into [newHomeDir], then points there from now on. */
-    fun migrateHomeTo(newHomeDir: String) {
+    /**
+     * Copies everything from the current home into [newHomeDir], then points there from now on.
+     * Runs on [Dispatchers.IO]: this can copy an entire config + every profile snapshot, which on
+     * Android (SAF) is Binder IPC per file and easily blows past the ANR threshold if run on the
+     * caller's (UI) thread.
+     */
+    suspend fun migrateHomeTo(newHomeDir: String) = withContext(Dispatchers.IO) {
         val oldHomeDir = currentHomeDir()
         fs.ensureDirectory(newHomeDir)
         if (oldHomeDir != newHomeDir) {

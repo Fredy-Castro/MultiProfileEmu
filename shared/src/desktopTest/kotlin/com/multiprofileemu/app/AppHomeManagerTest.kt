@@ -3,6 +3,7 @@ package com.multiprofileemu.app
 import com.multiprofileemu.fs.DesktopFileSystemAdapter
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,7 +13,7 @@ class AppHomeManagerTest {
     private val fs = DesktopFileSystemAdapter()
 
     @Test
-    fun migrateHomeTo_copiesExistingDataAndPointsAtNewLocation() {
+    fun migrateHomeTo_copiesExistingDataAndPointsAtNewLocation() = runBlocking {
         val root = Files.createTempDirectory("multiprofileemu-home-test").toFile()
         try {
             val anchor = File(root, "anchor").apply { mkdirs() }

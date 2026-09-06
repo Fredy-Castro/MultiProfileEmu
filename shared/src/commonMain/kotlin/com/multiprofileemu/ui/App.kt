@@ -42,7 +42,7 @@ fun App(
     controller: AppController,
     gamepad: GamepadController,
     homeDir: String,
-    onMigrateHome: (String) -> String?,
+    onMigrateHome: suspend (String) -> String?,
     supportsHomeMigration: Boolean = true,
 ) {
     MaterialTheme {

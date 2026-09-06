@@ -32,6 +32,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +45,7 @@ import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.platform.displayHomeDir
 import com.multiprofileemu.platform.pickFolderDialog
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,10 +53,11 @@ fun GroupListScreen(
     controller: AppController,
     actions: Flow<GamepadAction>,
     homeDir: String,
-    onMigrateHome: (String) -> String?,
+    onMigrateHome: suspend (String) -> String?,
     supportsHomeMigration: Boolean = true,
     onOpenGroup: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     val groups by controller.groups.collectAsState()
     val focus = remember { FocusListState(groups.size) }
     LaunchedEffect(groups.size) { focus.updateItemCount(groups.size) }
@@ -122,7 +125,7 @@ fun GroupListScreen(
         AddGroupDialog(
             onDismiss = { showAddDialog = false },
             onConfirm = { name, path ->
-                controller.addGroup(name, path)
+                scope.launch { controller.addGroup(name, path) }
                 showAddDialog = false
             },
         )
@@ -208,10 +211,11 @@ private fun AddGroupDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
 @Composable
 private fun SettingsDialog(
     homeDir: String,
-    onMigrate: (String) -> String?,
+    onMigrate: suspend (String) -> String?,
     supportsMigration: Boolean,
     onDismiss: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var migrationError by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -239,7 +243,9 @@ private fun SettingsDialog(
             if (supportsMigration) {
                 TextButton(onClick = {
                     pickFolderDialog("Elegí la nueva carpeta de datos", homeDir) { chosen ->
-                        if (chosen != null && chosen != homeDir) migrationError = onMigrate(chosen)
+                        if (chosen != null && chosen != homeDir) {
+                            scope.launch { migrationError = onMigrate(chosen) }
+                        }
                     }
                 }) { Text("Migrar a otra carpeta…") }
             }
