@@ -58,7 +58,7 @@ class AppHomeManager(
         fs.ensureDirectory(newHomeDir)
         if (oldHomeDir != newHomeDir) {
             fs.copyDirectoryContents(oldHomeDir, newHomeDir) { done, total ->
-                onProgress(OperationProgress(OperationPhase.MIGRATING, done, total))
+                onProgress(OperationProgress(OperationPhase.MIGRATING, done.toLong(), total.toLong()))
             }
         }
         setHomeDir(newHomeDir)

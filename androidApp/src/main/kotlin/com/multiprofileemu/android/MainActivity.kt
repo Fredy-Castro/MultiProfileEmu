@@ -12,7 +12,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.multiprofileemu.app.AppController
 import com.multiprofileemu.app.AppHomeManager
+import com.multiprofileemu.cloud.createRcloneRunner
 import com.multiprofileemu.data.AppConfigRepository
+import com.multiprofileemu.domain.CloudSyncEngine
 import com.multiprofileemu.domain.ProfileStorageResolver
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.fs.createFileSystemAdapter
@@ -57,6 +59,9 @@ class MainActivity : ComponentActivity() {
         // later is opt-in from Settings.
         val anchorDir = defaultAppDataDir()
         val homeManager = AppHomeManager(fs, anchorDir, defaultHomeDir = anchorDir)
+        // Not usable yet (AndroidRcloneRunner.isAvailable() == false) — cloud sync is desktop-only
+        // for now — but AppController still needs an instance since it isn't nullable.
+        val cloudSyncEngine = CloudSyncEngine(createRcloneRunner("$anchorDir/rclone.conf"))
 
         setContent {
             var homeDir by remember { mutableStateOf(homeManager.currentHomeDir()) }
@@ -68,7 +73,7 @@ class MainActivity : ComponentActivity() {
                     fs.ensureDirectory(homeDir)
                     val configRepository = AppConfigRepository(fs, configFilePath = "$homeDir/config.json")
                     val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$homeDir/profiles"))
-                    AppController(configRepository, swapEngine)
+                    AppController(configRepository, swapEngine, cloudSyncEngine)
                 }
 
                 App(

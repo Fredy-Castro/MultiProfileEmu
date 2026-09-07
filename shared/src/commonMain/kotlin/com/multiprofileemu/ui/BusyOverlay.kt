@@ -19,6 +19,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.multiprofileemu.domain.OperationPhase
 import com.multiprofileemu.domain.OperationProgress
+import com.multiprofileemu.domain.isIndeterminate
+import kotlin.math.ln
+import kotlin.math.pow
 
 private fun phaseLabel(phase: OperationPhase): String = when (phase) {
     OperationPhase.CAPTURING -> "Capturando el save activo..."
@@ -27,6 +30,24 @@ private fun phaseLabel(phase: OperationPhase): String = when (phase) {
     OperationPhase.BACKING_UP_OUTGOING -> "Guardando el perfil anterior..."
     OperationPhase.RESTORING_INCOMING -> "Restaurando el perfil elegido..."
     OperationPhase.MIGRATING -> "Moviendo la carpeta de datos..."
+    OperationPhase.CLOUD_AUTHORIZING -> "Se abrió tu navegador para autorizar el acceso a Google Drive..."
+    OperationPhase.CLOUD_UPLOAD -> "Subiendo a la nube..."
+    OperationPhase.CLOUD_DOWNLOAD -> "Bajando de la nube..."
+    OperationPhase.CLOUD_BISYNC -> "Sincronizando con la nube (dos vías)..."
+}
+
+private fun isByteBased(phase: OperationPhase): Boolean = when (phase) {
+    OperationPhase.CLOUD_UPLOAD, OperationPhase.CLOUD_DOWNLOAD, OperationPhase.CLOUD_BISYNC -> true
+    else -> false
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val exp = (ln(bytes.toDouble()) / ln(1024.0)).toInt().coerceAtMost(4)
+    val value = bytes / 1024.0.pow(exp)
+    val unit = "KMGT"[exp - 1]
+    val rounded = (value * 10).toInt() / 10.0
+    return "$rounded ${unit}iB"
 }
 
 /**
@@ -61,16 +82,27 @@ fun BusyOverlay(progress: OperationProgress) {
                 ) {
                     Text(phaseLabel(progress.phase), style = MaterialTheme.typography.titleMedium)
                     Column(modifier = Modifier.padding(top = 16.dp).fillMaxWidth()) {
-                        LinearProgressIndicator(
-                            progress = { progress.fraction },
-                            modifier = Modifier.fillMaxWidth(),
+                        if (progress.phase.isIndeterminate) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress.fraction },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    if (!progress.phase.isIndeterminate) {
+                        val detail = if (isByteBased(progress.phase)) {
+                            "${formatBytes(progress.done)} / ${formatBytes(progress.total)}"
+                        } else {
+                            "${progress.done}/${progress.total} archivos"
+                        }
+                        Text(
+                            "${(progress.fraction * 100).toInt()}% · $detail",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 12.dp),
                         )
                     }
-                    Text(
-                        "${(progress.fraction * 100).toInt()}% · ${progress.filesDone}/${progress.filesTotal}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
                 }
             }
         }

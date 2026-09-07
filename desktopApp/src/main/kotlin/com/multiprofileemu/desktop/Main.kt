@@ -10,7 +10,9 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.multiprofileemu.app.AppController
 import com.multiprofileemu.app.AppHomeManager
+import com.multiprofileemu.cloud.createRcloneRunner
 import com.multiprofileemu.data.AppConfigRepository
+import com.multiprofileemu.domain.CloudSyncEngine
 import com.multiprofileemu.domain.ProfileStorageResolver
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.fs.createFileSystemAdapter
@@ -41,6 +43,12 @@ private fun runGui() = application {
     // Outlives any screen's rememberCoroutineScope() — a migration in flight must finish even if
     // the user closes the Settings dialog mid-copy. See AppController for the same reasoning.
     val appScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+    // rclone.conf lives at the fixed anchor dir, not the migratable home dir — remotes/tokens
+    // should never follow "move my saves to a USB stick" the way profile snapshots do.
+    val cloudSyncEngine = remember {
+        fs.ensureDirectory(anchorDir)
+        CloudSyncEngine(createRcloneRunner("$anchorDir/rclone.conf"))
+    }
 
     var homeDir by remember {
         mutableStateOf(if (homeManager.isFirstRun()) null else homeManager.currentHomeDir())
@@ -67,13 +75,14 @@ private fun runGui() = application {
                     fs.ensureDirectory(resolvedHomeDir)
                     val configRepository = AppConfigRepository(fs, configFilePath = "$resolvedHomeDir/config.json")
                     val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$resolvedHomeDir/profiles"))
-                    AppController(configRepository, swapEngine)
+                    AppController(configRepository, swapEngine, cloudSyncEngine)
                 }
 
                 App(
                     controller = controller,
                     gamepad = gamepad,
                     homeDir = resolvedHomeDir,
+                    supportsCloudSync = true,
                     onMigrateHome = { newDir ->
                         val error = appScope.async {
                             try {

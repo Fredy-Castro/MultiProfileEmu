@@ -22,6 +22,9 @@ class ProfileSwapEngine(
     private val storage: ProfileStorageResolver,
 ) {
 
+    /** Where a profile's snapshot lives on disk — exposed for callers (e.g. cloud sync) that need the raw path. */
+    fun storagePathFor(groupId: String, profileId: String): String = storage.storagePath(groupId, profileId)
+
     /**
      * Switches [group]'s active save folder to [targetProfileId]'s content.
      *
@@ -44,7 +47,7 @@ class ProfileSwapEngine(
             fs.ensureDirectory(outgoingPath)
             fs.clearDirectoryContents(outgoingPath)
             fs.copyDirectoryContents(activePath, outgoingPath) { done, total ->
-                onProgress(OperationProgress(OperationPhase.BACKING_UP_OUTGOING, done, total))
+                onProgress(OperationProgress(OperationPhase.BACKING_UP_OUTGOING, done.toLong(), total.toLong()))
             }
         }
 
@@ -52,7 +55,7 @@ class ProfileSwapEngine(
         fs.ensureDirectory(targetPath)
         fs.clearDirectoryContents(activePath)
         fs.copyDirectoryContents(targetPath, activePath) { done, total ->
-            onProgress(OperationProgress(OperationPhase.RESTORING_INCOMING, done, total))
+            onProgress(OperationProgress(OperationPhase.RESTORING_INCOMING, done.toLong(), total.toLong()))
         }
 
         val now = currentEpochMillis()
@@ -76,7 +79,7 @@ class ProfileSwapEngine(
         fs.ensureDirectory(group.activeFolderPath)
         fs.ensureDirectory(newPath)
         fs.copyDirectoryContents(group.activeFolderPath, newPath) { done, total ->
-            onProgress(OperationProgress(OperationPhase.CAPTURING, done, total))
+            onProgress(OperationProgress(OperationPhase.CAPTURING, done.toLong(), total.toLong()))
         }
 
         return group.copy(
@@ -104,7 +107,7 @@ class ProfileSwapEngine(
         fs.clearDirectoryContents(path)
         fs.ensureDirectory(group.activeFolderPath)
         fs.copyDirectoryContents(group.activeFolderPath, path) { done, total ->
-            onProgress(OperationProgress(OperationPhase.SYNCING, done, total))
+            onProgress(OperationProgress(OperationPhase.SYNCING, done.toLong(), total.toLong()))
         }
 
         val now = currentEpochMillis()
@@ -139,7 +142,7 @@ class ProfileSwapEngine(
         fs.ensureDirectory(sourcePath)
         fs.ensureDirectory(destPath)
         fs.copyDirectoryContents(sourcePath, destPath) { done, total ->
-            onProgress(OperationProgress(OperationPhase.DUPLICATING, done, total))
+            onProgress(OperationProgress(OperationPhase.DUPLICATING, done.toLong(), total.toLong()))
         }
         return group.copy(profiles = group.profiles + newProfile)
     }

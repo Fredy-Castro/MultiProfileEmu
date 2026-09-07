@@ -46,6 +46,7 @@ fun App(
     homeDir: String,
     onMigrateHome: suspend (String) -> String?,
     supportsHomeMigration: Boolean = true,
+    supportsCloudSync: Boolean = false,
 ) {
     MaterialTheme {
         Surface {
@@ -94,6 +95,7 @@ fun App(
                         homeDir = homeDir,
                         onMigrateHome = onMigrateHome,
                         supportsHomeMigration = supportsHomeMigration,
+                        supportsCloudSync = supportsCloudSync,
                         onOpenGroup = { route = Route.GroupDetail(it) },
                     )
                     is Route.GroupDetail -> {
@@ -106,6 +108,7 @@ fun App(
                                 controller = controller,
                                 group = group,
                                 actions = actions,
+                                supportsCloudSync = supportsCloudSync,
                                 onBack = { route = Route.GroupList },
                             )
                         }

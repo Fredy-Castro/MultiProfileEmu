@@ -1,9 +1,14 @@
 package com.multiprofileemu.app
 
 import com.multiprofileemu.data.AppConfigRepository
+import com.multiprofileemu.domain.CloudSyncEngine
+import com.multiprofileemu.domain.OperationPhase
 import com.multiprofileemu.domain.OperationProgress
 import com.multiprofileemu.domain.ProfileSwapEngine
+import com.multiprofileemu.model.CloudSyncConfig
+import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.SaveGroup
+import com.multiprofileemu.util.currentEpochMillis
 import com.multiprofileemu.util.newId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +40,7 @@ import kotlinx.coroutines.withContext
 class AppController(
     private val configRepository: AppConfigRepository,
     private val swapEngine: ProfileSwapEngine,
+    private val cloudSyncEngine: CloudSyncEngine,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
@@ -42,10 +48,10 @@ class AppController(
     private val _groups = MutableStateFlow(configRepository.loadGroups())
     val groups: StateFlow<List<SaveGroup>> = _groups.asStateFlow()
 
-    // Non-null while a heavy file operation (profile swap, capture, sync, migration...) is in
-    // flight, on this or on any other operation reporting through [reportProgress]. The UI uses
-    // this to show a progress overlay and block touch/gamepad input, since without it users had no
-    // way to tell a switch was still running versus their tap having been dropped.
+    // Non-null while a heavy file operation (profile swap, capture, sync, migration, cloud
+    // sync...) is in flight, on this or on any other operation reporting through [reportProgress].
+    // The UI uses this to show a progress overlay and block touch/gamepad input, since without it
+    // users had no way to tell a switch was still running versus their tap having been dropped.
     private val _busy = MutableStateFlow<OperationProgress?>(null)
     val busy: StateFlow<OperationProgress?> = _busy.asStateFlow()
 
@@ -54,9 +60,11 @@ class AppController(
         _busy.value = progress
     }
 
-    private suspend fun runMutation(block: suspend () -> Unit) {
-        scope.async { mutex.withLock { block() } }.await()
-    }
+    val cloudSyncAvailable: Boolean get() = cloudSyncEngine.isRcloneAvailable()
+
+    private suspend fun <T> runExclusive(block: suspend () -> T): T = scope.async { mutex.withLock { block() } }.await()
+
+    private suspend fun runMutation(block: suspend () -> Unit) = runExclusive(block)
 
     private suspend fun persist(newGroups: List<SaveGroup>) {
         _groups.value = newGroups
@@ -116,4 +124,64 @@ class AppController(
         updateGroup(groupId) { group ->
             swapEngine.duplicateProfile(group, profileId, newName, onProgress = { progress -> _busy.value = progress })
         }
+
+    // --- Cloud sync -----------------------------------------------------------------------
+
+    suspend fun listCloudRemotes(): List<String> = runExclusive { cloudSyncEngine.listRemotes() }
+
+    suspend fun addGoogleDriveRemote(name: String): String? = runExclusive {
+        try {
+            _busy.value = OperationProgress(OperationPhase.CLOUD_AUTHORIZING, 0L, 0L)
+            cloudSyncEngine.createDriveRemote(name)
+        } finally {
+            _busy.value = null
+        }
+    }
+
+    suspend fun deleteCloudRemote(name: String) = runExclusive { cloudSyncEngine.deleteRemote(name) }
+
+    /**
+     * Persists [config] onto the profile and immediately runs the sync it describes — one step,
+     * same pattern as "Crear"/"Capturar" elsewhere: configuring and doing are the same action.
+     * Returns an error message, or null on success.
+     */
+    suspend fun runCloudSync(groupId: String, profileId: String, config: CloudSyncConfig): String? = runExclusive {
+        try {
+            val groups = _groups.value
+            val group = groups.firstOrNull { it.id == groupId }
+            if (group == null) {
+                "No se encontró el grupo."
+            } else {
+                val localPath = swapEngine.storagePathFor(groupId, profileId)
+                val resync = config.mode == CloudSyncMode.BISYNC && !config.everResynced
+                val error = cloudSyncEngine.sync(
+                    localPath = localPath,
+                    remoteName = config.remoteName,
+                    remotePath = config.remotePath,
+                    mode = config.mode,
+                    resync = resync,
+                    onProgress = { progress -> _busy.value = progress },
+                )
+                val finalConfig = if (error == null) {
+                    config.copy(
+                        lastSyncedEpochMs = currentEpochMillis(),
+                        everResynced = config.everResynced || config.mode == CloudSyncMode.BISYNC,
+                    )
+                } else {
+                    config
+                }
+                val updated = groups.map { g ->
+                    if (g.id != groupId) {
+                        g
+                    } else {
+                        g.copy(profiles = g.profiles.map { p -> if (p.id == profileId) p.copy(cloudSync = finalConfig) else p })
+                    }
+                }
+                persist(updated)
+                error
+            }
+        } finally {
+            _busy.value = null
+        }
+    }
 }

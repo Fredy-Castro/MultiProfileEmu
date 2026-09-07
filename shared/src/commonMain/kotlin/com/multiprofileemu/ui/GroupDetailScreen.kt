@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -25,8 +26,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.multiprofileemu.app.AppController
 import com.multiprofileemu.input.GamepadAction
+import com.multiprofileemu.model.CloudSyncConfig
+import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.model.SaveProfile
 import kotlinx.coroutines.flow.Flow
@@ -51,17 +56,20 @@ import kotlinx.coroutines.launch
 private enum class ProfileAction(val label: String) {
     SWITCH("Cambiar a este"),
     SYNC("Sincronizar"),
+    CLOUD_SYNC("Sincronización cloud"),
     RENAME("Renombrar"),
     DUPLICATE("Duplicar"),
     DELETE("Eliminar"),
 }
 
-private fun actionsForProfile(isActive: Boolean): List<ProfileAction> =
-    if (isActive) {
-        listOf(ProfileAction.SYNC, ProfileAction.RENAME, ProfileAction.DUPLICATE, ProfileAction.DELETE)
-    } else {
-        listOf(ProfileAction.SWITCH, ProfileAction.SYNC, ProfileAction.RENAME, ProfileAction.DUPLICATE, ProfileAction.DELETE)
-    }
+private fun actionsForProfile(isActive: Boolean, supportsCloudSync: Boolean): List<ProfileAction> = buildList {
+    if (!isActive) add(ProfileAction.SWITCH)
+    add(ProfileAction.SYNC)
+    if (supportsCloudSync) add(ProfileAction.CLOUD_SYNC)
+    add(ProfileAction.RENAME)
+    add(ProfileAction.DUPLICATE)
+    add(ProfileAction.DELETE)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +77,7 @@ fun GroupDetailScreen(
     controller: AppController,
     group: SaveGroup,
     actions: Flow<GamepadAction>,
+    supportsCloudSync: Boolean = false,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -90,10 +99,11 @@ fun GroupDetailScreen(
     }
 
     var pendingDialog by remember { mutableStateOf<DetailDialog?>(null) }
+    var cloudSyncError by remember { mutableStateOf<String?>(null) }
 
     fun focusedRowActionCount(): Int {
         val profile = currentGroup.value.profiles.getOrNull(focus.focusedIndex) ?: return 0
-        return actionsForProfile(profile.id == currentGroup.value.activeProfileId).size
+        return actionsForProfile(profile.id == currentGroup.value.activeProfileId, supportsCloudSync).size
     }
 
     LaunchedEffect(actions, group.id) {
@@ -128,11 +138,12 @@ fun GroupDetailScreen(
                     val liveGroup = currentGroup.value
                     val profile = liveGroup.profiles.getOrNull(focus.focusedIndex)
                     if (profile != null) {
-                        val rowActions = actionsForProfile(profile.id == liveGroup.activeProfileId)
+                        val rowActions = actionsForProfile(profile.id == liveGroup.activeProfileId, supportsCloudSync)
                         when (rowActions.getOrNull(focusedActionIndex)) {
                             ProfileAction.SWITCH ->
                                 if (liveGroup.activeProfileId != null) controller.switchProfile(liveGroup.id, profile.id)
                             ProfileAction.SYNC -> controller.syncActiveToProfile(liveGroup.id, profile.id)
+                            ProfileAction.CLOUD_SYNC -> pendingDialog = DetailDialog.CloudSync(profile)
                             ProfileAction.RENAME -> pendingDialog = DetailDialog.RenameProfile(profile)
                             ProfileAction.DUPLICATE -> pendingDialog = DetailDialog.DuplicateProfile(profile)
                             ProfileAction.DELETE -> controller.deleteProfile(liveGroup.id, profile.id)
@@ -167,6 +178,10 @@ fun GroupDetailScreen(
                 FirstUseBanner(onCapture = { pendingDialog = DetailDialog.CaptureActive })
             }
 
+            cloudSyncError?.let { error ->
+                ErrorBanner(message = error, onDismiss = { cloudSyncError = null })
+            }
+
             if (group.profiles.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Todavía no hay perfiles en este grupo.")
@@ -181,8 +196,10 @@ fun GroupDetailScreen(
                             focused = rowFocused,
                             focusedActionIndex = if (rowFocused) focusedActionIndex else -1,
                             switchEnabled = group.activeProfileId != null,
+                            supportsCloudSync = supportsCloudSync,
                             onSwitch = { scope.launch { controller.switchProfile(group.id, profile.id) } },
                             onSync = { scope.launch { controller.syncActiveToProfile(group.id, profile.id) } },
+                            onCloudSync = { pendingDialog = DetailDialog.CloudSync(profile) },
                             onRename = { pendingDialog = DetailDialog.RenameProfile(profile) },
                             onDuplicate = { pendingDialog = DetailDialog.DuplicateProfile(profile) },
                             onDelete = { scope.launch { controller.deleteProfile(group.id, profile.id) } },
@@ -237,6 +254,23 @@ fun GroupDetailScreen(
                 pendingDialog = null
             },
         )
+        is DetailDialog.CloudSync -> CloudSyncDialog(
+            controller = controller,
+            groupName = group.name,
+            profile = dialog.profile,
+            onDismiss = { pendingDialog = null },
+            onConfirm = { config ->
+                pendingDialog = null
+                // Launched on this screen's own scope (not the dialog's, which is about to be
+                // disposed) so the result actually reaches `cloudSyncError` — the sync itself
+                // would survive either way (it runs on AppController's app-lifetime scope), but
+                // a scope tied to the dialog gets cancelled the instant it closes, before
+                // `runCloudSync`'s await() ever returns.
+                scope.launch {
+                    cloudSyncError = controller.runCloudSync(group.id, dialog.profile.id, config)
+                }
+            },
+        )
     }
 }
 
@@ -245,6 +279,122 @@ private sealed interface DetailDialog {
     data object CaptureActive : DetailDialog
     data class RenameProfile(val profile: SaveProfile) : DetailDialog
     data class DuplicateProfile(val profile: SaveProfile) : DetailDialog
+    data class CloudSync(val profile: SaveProfile) : DetailDialog
+}
+
+@Composable
+private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(message, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onErrorContainer)
+            TextButton(onClick = onDismiss) { Text("Cerrar") }
+        }
+    }
+}
+
+@Composable
+private fun CloudSyncDialog(
+    controller: AppController,
+    groupName: String,
+    profile: SaveProfile,
+    onDismiss: () -> Unit,
+    onConfirm: (CloudSyncConfig) -> Unit,
+) {
+    var remotes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loadingRemotes by remember { mutableStateOf(true) }
+    var selectedRemote by remember { mutableStateOf(profile.cloudSync?.remoteName) }
+    var remotePath by remember {
+        mutableStateOf(profile.cloudSync?.remotePath ?: "MultiProfileEmu/$groupName/${profile.name}")
+    }
+    var mode by remember { mutableStateOf(profile.cloudSync?.mode ?: CloudSyncMode.UPLOAD) }
+
+    LaunchedEffect(Unit) {
+        remotes = controller.listCloudRemotes()
+        loadingRemotes = false
+        if (selectedRemote == null) selectedRemote = remotes.firstOrNull()
+    }
+
+    fun confirm() {
+        val remote = selectedRemote ?: return
+        val existing = profile.cloudSync
+        val everResynced = if (existing != null && existing.remoteName == remote &&
+            existing.remotePath == remotePath && existing.mode == mode
+        ) {
+            existing.everResynced
+        } else {
+            false
+        }
+        onConfirm(
+            CloudSyncConfig(
+                remoteName = remote,
+                remotePath = remotePath.trim(),
+                mode = mode,
+                everResynced = everResynced,
+            ),
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sincronización cloud — ${profile.name}") },
+        text = {
+            Column {
+                when {
+                    loadingRemotes -> Text("Cargando remotos...")
+                    remotes.isEmpty() -> Text(
+                        "Todavía no agregaste ningún remoto. Andá a Configuración para crear uno primero.",
+                    )
+                    else -> {
+                        Text("Remoto", style = MaterialTheme.typography.labelLarge)
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            remotes.forEach { remote ->
+                                val selected = remote == selectedRemote
+                                Spacer(Modifier.width(4.dp))
+                                if (selected) {
+                                    Button(onClick = { selectedRemote = remote }) { Text(remote) }
+                                } else {
+                                    OutlinedButton(onClick = { selectedRemote = remote }) { Text(remote) }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = remotePath,
+                            onValueChange = { remotePath = it },
+                            label = { Text("Carpeta remota") },
+                            singleLine = true,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text("Tipo de sincronización", style = MaterialTheme.typography.labelLarge)
+                        Row {
+                            listOf(
+                                CloudSyncMode.UPLOAD to "Subir",
+                                CloudSyncMode.DOWNLOAD to "Bajar",
+                                CloudSyncMode.BISYNC to "Dos vías",
+                            ).forEach { (candidate, label) ->
+                                Spacer(Modifier.width(4.dp))
+                                if (mode == candidate) {
+                                    Button(onClick = { mode = candidate }) { Text(label) }
+                                } else {
+                                    OutlinedButton(onClick = { mode = candidate }) { Text(label) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !loadingRemotes && selectedRemote != null && remotePath.isNotBlank(),
+                onClick = ::confirm,
+            ) { Text("Sincronizar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 @Composable
@@ -274,8 +424,10 @@ private fun ProfileRow(
     focused: Boolean,
     focusedActionIndex: Int,
     switchEnabled: Boolean,
+    supportsCloudSync: Boolean,
     onSwitch: () -> Unit,
     onSync: () -> Unit,
+    onCloudSync: () -> Unit,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
@@ -283,11 +435,12 @@ private fun ProfileRow(
     val callbacks = mapOf(
         ProfileAction.SWITCH to onSwitch,
         ProfileAction.SYNC to onSync,
+        ProfileAction.CLOUD_SYNC to onCloudSync,
         ProfileAction.RENAME to onRename,
         ProfileAction.DUPLICATE to onDuplicate,
         ProfileAction.DELETE to onDelete,
     )
-    val rowActions = actionsForProfile(isActive)
+    val rowActions = actionsForProfile(isActive, supportsCloudSync)
 
     Card(
         modifier = Modifier

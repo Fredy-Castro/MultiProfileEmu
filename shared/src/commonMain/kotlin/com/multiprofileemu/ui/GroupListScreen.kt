@@ -3,6 +3,7 @@ package com.multiprofileemu.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -55,6 +57,7 @@ fun GroupListScreen(
     homeDir: String,
     onMigrateHome: suspend (String) -> String?,
     supportsHomeMigration: Boolean = true,
+    supportsCloudSync: Boolean = false,
     onOpenGroup: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -133,9 +136,11 @@ fun GroupListScreen(
 
     if (showSettingsDialog) {
         SettingsDialog(
+            controller = controller,
             homeDir = homeDir,
             onMigrate = onMigrateHome,
             supportsMigration = supportsHomeMigration,
+            supportsCloudSync = supportsCloudSync,
             onDismiss = { showSettingsDialog = false },
         )
     }
@@ -210,9 +215,11 @@ private fun AddGroupDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
 
 @Composable
 private fun SettingsDialog(
+    controller: AppController,
     homeDir: String,
     onMigrate: suspend (String) -> String?,
     supportsMigration: Boolean,
+    supportsCloudSync: Boolean,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -237,6 +244,10 @@ private fun SettingsDialog(
                     Spacer(Modifier.height(8.dp))
                     Text(error, color = MaterialTheme.colorScheme.error)
                 }
+                if (supportsCloudSync) {
+                    Spacer(Modifier.height(16.dp))
+                    CloudRemotesSection(controller = controller)
+                }
             }
         },
         confirmButton = {
@@ -252,4 +263,73 @@ private fun SettingsDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
     )
+}
+
+@Composable
+private fun CloudRemotesSection(controller: AppController) {
+    val scope = rememberCoroutineScope()
+    var rcloneAvailable by remember { mutableStateOf(true) }
+    var remotes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showAddRemoteDialog by remember { mutableStateOf(false) }
+    var addRemoteError by remember { mutableStateOf<String?>(null) }
+    var refreshTrigger by remember { mutableStateOf(0) }
+
+    LaunchedEffect(refreshTrigger) {
+        rcloneAvailable = controller.cloudSyncAvailable
+        remotes = if (rcloneAvailable) controller.listCloudRemotes() else emptyList()
+    }
+
+    Text("Remotos cloud", style = MaterialTheme.typography.labelLarge)
+    if (!rcloneAvailable) {
+        Text(
+            "rclone no está instalado. Instalalo desde rclone.org/downloads y asegurate de que " +
+                "esté disponible en el PATH del sistema.",
+        )
+        TextButton(onClick = { refreshTrigger++ }) { Text("Reintentar") }
+    } else {
+        if (remotes.isEmpty()) {
+            Text("Todavía no agregaste ningún remoto.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            remotes.forEach { remote ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(remote, modifier = Modifier.weight(1f))
+                    IconButton(onClick = {
+                        scope.launch {
+                            controller.deleteCloudRemote(remote)
+                            refreshTrigger++
+                        }
+                    }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Eliminar remoto")
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = { addRemoteError = null; showAddRemoteDialog = true }) {
+            Text("+ Agregar remoto de Google Drive")
+        }
+    }
+
+    if (showAddRemoteDialog) {
+        TextInputDialog(
+            title = "Nuevo remoto de Google Drive",
+            label = "Nombre del remoto (ej: MiDrive)",
+            confirmLabel = "Agregar",
+            onDismiss = { showAddRemoteDialog = false },
+            onConfirm = { name ->
+                showAddRemoteDialog = false
+                scope.launch {
+                    addRemoteError = controller.addGoogleDriveRemote(name)
+                    refreshTrigger++
+                }
+            },
+        )
+    }
+    addRemoteError?.let { error ->
+        Spacer(Modifier.height(4.dp))
+        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
 }
