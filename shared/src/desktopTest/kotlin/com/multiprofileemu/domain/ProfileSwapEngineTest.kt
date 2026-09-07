@@ -50,4 +50,49 @@ class ProfileSwapEngineTest {
             root.deleteRecursively()
         }
     }
+
+    /**
+     * Real-world emulator setups (e.g. Flatpak installs on Bazzite/SteamOS via EmuDeck) often
+     * point the active save folder at a symlink rather than a plain directory. Regression test
+     * for a real data-loss bug found on hardware: `Files.walk()` without `FOLLOW_LINKS` treats a
+     * symlinked root as an opaque leaf and never descends into it, so the outgoing profile's
+     * backup silently copied zero files right before the real files (at the symlink target) were
+     * wiped by clearDirectoryContents — which, using java.io.File, does resolve the symlink.
+     */
+    @Test
+    fun switchProfile_backsUpOutgoingWhenActiveFolderIsASymlink() {
+        val root = Files.createTempDirectory("multiprofileemu-test").toFile()
+        try {
+            val realActiveDir = File(root, "real-active").apply { mkdirs() }
+            File(realActiveDir, "save.dat").writeText("dad-progress")
+            val activeLink = File(root, "active-link")
+            try {
+                Files.createSymbolicLink(activeLink.toPath(), realActiveDir.toPath())
+            } catch (e: java.nio.file.FileSystemException) {
+                // Creating symlinks needs a privilege this machine's account doesn't have (e.g.
+                // Windows without Developer Mode/admin) — nothing to do with the bug being tested,
+                // so skip rather than fail. Runs for real on any CI/dev box with real symlink
+                // support (every Linux/macOS box, and Windows with Developer Mode on).
+                org.junit.Assume.assumeNoException("symlinks unsupported on this machine", e)
+                return
+            }
+
+            val storage = ProfileStorageResolver(File(root, "profiles").path)
+            val engine = ProfileSwapEngine(fs, storage)
+
+            var group = SaveGroup(id = "g1", name = "Test Game", activeFolderPath = activeLink.path)
+            group = engine.createProfileFromActive(group, "Dad")
+            val dadId = group.activeProfileId!!
+            group = engine.createEmptyProfile(group, "Kid")
+            val kidId = group.profiles.first { it.name == "Kid" }.id
+
+            group = engine.switchProfile(group, kidId)
+
+            // The real bug: this file existed at the symlink target and should have been backed
+            // up into Dad's storage before the active folder was cleared for Kid.
+            assertEquals("dad-progress", File(root, "profiles/g1/$dadId/save.dat").readText())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

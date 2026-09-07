@@ -1,6 +1,7 @@
 package com.multiprofileemu.fs
 
 import java.io.File
+import java.nio.file.FileVisitOption
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -32,7 +33,14 @@ class DesktopFileSystemAdapter : FileSystemAdapter {
         var done = 0
         onProgress(0, total)
 
-        Files.walk(sourceRoot).use { stream ->
+        // FOLLOW_LINKS matters here: several emulator setups (Flatpak installs on Bazzite/SteamOS
+        // via EmuDeck, for instance) point the save folder itself at a symlink. Files.walk()
+        // without it only ever visits the symlink as a single opaque entry and never descends
+        // into its contents — copyDirectoryContents would then silently copy zero files, and the
+        // outgoing profile's backup during a switch ends up empty right before the real files (at
+        // the symlink target) get wiped by clearDirectoryContents (which, using java.io.File, does
+        // resolve the symlink) — actual data loss. Reproduced and confirmed on real hardware.
+        Files.walk(sourceRoot, FileVisitOption.FOLLOW_LINKS).use { stream ->
             stream.forEach { source ->
                 val relative = sourceRoot.relativize(source)
                 if (relative.toString().isEmpty()) return@forEach
@@ -51,13 +59,15 @@ class DesktopFileSystemAdapter : FileSystemAdapter {
 
     private fun countFiles(root: Path): Int {
         if (!Files.exists(root)) return 0
-        Files.walk(root).use { stream -> return stream.filter { Files.isRegularFile(it) }.count().toInt() }
+        Files.walk(root, FileVisitOption.FOLLOW_LINKS).use { stream ->
+            return stream.filter { Files.isRegularFile(it) }.count().toInt()
+        }
     }
 
     override fun sizeOfDirectory(path: String): Long {
         val root = Path.of(path)
         if (!Files.exists(root)) return 0L
-        return Files.walk(root).use { stream ->
+        return Files.walk(root, FileVisitOption.FOLLOW_LINKS).use { stream ->
             stream.filter { Files.isRegularFile(it) }.mapToLong { Files.size(it) }.sum()
         }
     }
