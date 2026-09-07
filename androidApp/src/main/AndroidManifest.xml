@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Needed by the bundled rclone binary: cloud sync itself obviously needs network access,
+         and even the local OAuth handshake (a loopback listen socket on 127.0.0.1:53682) is
+         blocked by SELinux without this — Android only grants the INET socket group to apps that
+         declare it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name="com.multiprofileemu.MultiProfileEmuApplication"
         android:allowBackup="true"
@@ -8,7 +14,8 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MultiProfileEmu">
+        android:theme="@style/Theme.MultiProfileEmu"
+        android:extractNativeLibs="true">
 
         <activity
             android:name=".MainActivity"

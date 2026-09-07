@@ -25,6 +25,10 @@ Funcional en **Windows, Linux y Android**:
   incluso a una carpeta SAF en Android.
 - **Modo línea de comandos** (solo desktop) para cambiar de perfil sin abrir la ventana — pensado
   para encadenarse antes de lanzar el emulador (ver "Integración con Steam" abajo).
+- **Sincronización cloud con Google Drive** (vía rclone real, no una reimplementación): crear
+  remotos desde Configuración y, por perfil, subir/bajar/sincronizar en dos vías (`bisync`) contra
+  una carpeta de Drive — ver "Sincronización cloud (rclone)" abajo, especialmente el paso manual
+  necesario para compilar Android.
 
 Presets de rutas por emulador y modo root en Android son la siguiente iteración — ver "Roadmap".
 
@@ -164,6 +168,41 @@ exec /path/to/ryujinx "$@"
 Las "Opciones de lanzamiento" que Steam ROM Manager generó para el emulador (ruta de la ROM, flags,
 etc.) siguen funcionando igual — el script solo las reenvía (`%*` / `"$@"`) después de sincronizar
 el perfil.
+
+## Sincronización cloud (rclone)
+
+El motor real es [rclone](https://rclone.org) — la app solo lo orquesta (`CloudSyncEngine` en
+`shared/.../domain/CloudSyncEngine.kt`), nunca reimplementa el cliente de Drive ni el algoritmo de
+`bisync`. Los remotos y credenciales viven en un `rclone.conf` propio de la app (no el del
+usuario), en la carpeta fija de datos — no se mueve si migrás la carpeta home.
+
+### Desktop
+
+Necesita `rclone` instalado y en el `PATH` del sistema (no lo descarga ni lo empaqueta la app):
+[rclone.org/downloads](https://rclone.org/downloads/). Si falta, Configuración lo indica en vez de
+fallar. Crear un remoto abre el flujo de autorización propio de rclone (navegador + servidor
+local); la app solo espera a que termine.
+
+### Android
+
+Android no tiene "un PATH del sistema" ni permite ejecutar binarios descargados en runtime (API
+29+ lo bloquea por SELinux/W^X) — la única forma de correr un binario nativo real es empaquetarlo
+dentro del APK bajo `jniLibs/`, y **ese binario no se commitea al repo** (pesa ~75 MB). Antes de
+compilar `androidApp` hay que colocarlo a mano una vez:
+
+```bash
+curl -LO https://github.com/rclone/rclone/releases/latest/download/rclone-current-linux-arm64.zip
+unzip -j rclone-current-linux-arm64.zip "*/rclone" -d androidApp/src/main/jniLibs/arm64-v8a/
+mv androidApp/src/main/jniLibs/arm64-v8a/rclone androidApp/src/main/jniLibs/arm64-v8a/librclone.so
+```
+
+(el nombre `librclone.so` es obligatorio — Android solo extrae con permiso de ejecución los
+archivos bajo `jniLibs/` que respetan esa convención; internamente sigue siendo el binario de
+rclone para Linux, no una librería nativa real — pero es un binario Go estático, sin dependencia de
+glibc/bionic, así que corre nativo bajo el kernel de Android sin root).
+
+Solo se soporta `arm64-v8a` (todo el hardware real del usuario — celulares y handhelds modernos
+tipo Retroid/Ayn — es arm64); no hace falta ni conviene agregar otras arquitecturas.
 
 ## Tests
 

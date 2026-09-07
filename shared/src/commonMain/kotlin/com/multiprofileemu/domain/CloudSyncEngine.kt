@@ -26,7 +26,10 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
 
     suspend fun listRemotes(): List<String> {
         val lines = mutableListOf<String>()
-        runner.run(listOf("listremotes")) { line -> lines += line }
+        // -q suppresses the "Config file ... not found - using defaults" NOTICE rclone prints
+        // when rclone.conf doesn't exist yet (e.g. before any remote has ever been created) —
+        // without it, that line gets parsed below as if it were a remote name.
+        runner.run(listOf("listremotes", "-q")) { line -> lines += line }
         return lines.map { it.trim().removeSuffix(":") }.filter { it.isNotEmpty() }
     }
 
@@ -35,16 +38,29 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
     }
 
     /**
-     * Runs rclone's own interactive Drive setup (it opens the system browser and runs a local
-     * OAuth callback server itself — nothing here talks to Google directly). Returns an error
+     * Runs rclone's own interactive Drive setup. On desktop, rclone opens the system browser and
+     * runs a local OAuth callback server itself — nothing here talks to Google directly. A
+     * sandboxed process (Android) can't open a browser the same way, so rclone just prints the
+     * auth URL and waits instead; [onAuthUrl] is how the caller finds out about that URL so it can
+     * open it itself (e.g. via an Intent). Desktop callers can ignore it. Returns an error
      * message, or null on success. [RcloneRunner.run]'s cancellation handler kills the rclone
      * process the moment this timeout fires, so no zombie process is left waiting for a consent
      * that will never come.
      */
-    suspend fun createDriveRemote(name: String): String? {
+    suspend fun createDriveRemote(name: String, onAuthUrl: (String) -> Unit = {}): String? {
         val output = StringBuilder()
+        var urlReported = false
         val exitCode = withTimeoutOrNull(FIVE_MINUTES_MS) {
-            runner.run(listOf("config", "create", name, "drive")) { line -> output.appendLine(line) }
+            runner.run(listOf("config", "create", name, "drive")) { line ->
+                output.appendLine(line)
+                if (!urlReported) {
+                    val match = AUTH_URL_REGEX.find(line)
+                    if (match != null) {
+                        urlReported = true
+                        onAuthUrl(match.value)
+                    }
+                }
+            }
         }
         return when (exitCode) {
             null -> "Se agotó el tiempo de espera para autorizar el acceso a Google Drive. Intentá de nuevo."
@@ -114,5 +130,10 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
 
     private companion object {
         const val FIVE_MINUTES_MS = 5 * 60 * 1000L
+        // Must require the /auth path specifically — rclone also prints an earlier, informational
+        // notice ("Make sure your Redirect URL is set to \"http://127.0.0.1:53682/\" in your
+        // custom config.") whose bare "127.0.0.1:53682/" would otherwise match first and win,
+        // pointing the browser at a dead link instead of the real authorization URL.
+        val AUTH_URL_REGEX = Regex("""https?://127\.0\.0\.1:\d+/auth\S*""")
     }
 }

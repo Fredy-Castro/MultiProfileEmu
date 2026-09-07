@@ -8,6 +8,7 @@ import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.SaveGroup
+import com.multiprofileemu.platform.openUrlInBrowser
 import com.multiprofileemu.util.currentEpochMillis
 import com.multiprofileemu.util.newId
 import kotlinx.coroutines.CoroutineScope
@@ -132,7 +133,7 @@ class AppController(
     suspend fun addGoogleDriveRemote(name: String): String? = runExclusive {
         try {
             _busy.value = OperationProgress(OperationPhase.CLOUD_AUTHORIZING, 0L, 0L)
-            cloudSyncEngine.createDriveRemote(name)
+            cloudSyncEngine.createDriveRemote(name, onAuthUrl = ::openUrlInBrowser)
         } finally {
             _busy.value = null
         }

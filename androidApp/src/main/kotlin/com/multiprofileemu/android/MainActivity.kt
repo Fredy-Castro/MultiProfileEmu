@@ -59,8 +59,8 @@ class MainActivity : ComponentActivity() {
         // later is opt-in from Settings.
         val anchorDir = defaultAppDataDir()
         val homeManager = AppHomeManager(fs, anchorDir, defaultHomeDir = anchorDir)
-        // Not usable yet (AndroidRcloneRunner.isAvailable() == false) — cloud sync is desktop-only
-        // for now — but AppController still needs an instance since it isn't nullable.
+        // AndroidRcloneRunner runs a static rclone Linux binary bundled as a fake .so under
+        // jniLibs/<abi>/librclone.so — see that file for why this works without root.
         val cloudSyncEngine = CloudSyncEngine(createRcloneRunner("$anchorDir/rclone.conf"))
 
         setContent {
@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                         error
                     },
                     supportsHomeMigration = true,
+                    supportsCloudSync = true,
                 )
             }
         }

@@ -39,6 +39,16 @@ android {
         compose = true
     }
 
+    // librclone.so under jniLibs/ is really a static rclone binary, not a real shared library —
+    // it needs to be physically extracted to disk at install time so ProcessBuilder can exec()
+    // it (execve needs a real file path, unlike dlopen which can mmap straight out of the APK
+    // zip). AGP's modern default packs native libs uncompressed and unextracted for that reason;
+    // this opts back into the old extract-to-disk behavior, matching extractNativeLibs="true" in
+    // AndroidManifest.xml.
+    packaging {
+        jniLibs.useLegacyPackaging = true
+    }
+
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
             create("release") {

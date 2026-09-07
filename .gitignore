@@ -14,3 +14,7 @@ releases/
 androidApp/keystore.properties
 androidApp/*.jks
 androidApp/*.keystore
+
+# Bundled rclone binary for Android cloud sync (~75 MB) — not committed to keep the repo light.
+# See README.md for where to download it and where to place it before building androidApp.
+androidApp/src/main/jniLibs/
