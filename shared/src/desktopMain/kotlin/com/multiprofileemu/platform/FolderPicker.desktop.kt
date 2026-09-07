@@ -3,19 +3,23 @@ package com.multiprofileemu.platform
 import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.UIManager
-import javax.swing.plaf.metal.MetalLookAndFeel
 import javax.swing.plaf.nimbus.NimbusLookAndFeel
 
 actual fun pickFolderDialog(title: String, initialPath: String?, onResult: (String?) -> Unit) {
-    runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
-    // On some Linux setups (no GTK bindings available, e.g. minimal window managers) the system
-    // L&F falls back to Metal — whose JFileChooser UI defaults resolve `FileChooser.font` to null
-    // on Linux, making every label/button in the dialog render with invisible (zero-metric) text
-    // while the layout/borders still show. Nimbus ships with every JDK (no native library needed)
-    // and doesn't hit this, so it's a safe fallback specifically for that case; Windows/macOS
-    // always get a real native L&F here and never reach this branch.
-    if (UIManager.getLookAndFeel() is MetalLookAndFeel) {
+    val isLinux = System.getProperty("os.name")?.lowercase()?.contains("linux") == true
+    if (isLinux) {
+        // Linux's "system" L&F (GTKLookAndFeel, or a Metal fallback when no GTK bindings are
+        // available) has repeatedly shown the same failure mode across different real
+        // distros/desktop environments: JFileChooser's UI defaults resolve to a null font, so
+        // every label/button in the dialog renders with invisible (zero-metric) text while the
+        // layout/icons/borders still show fine. Confirmed both for the Metal fallback (WSLg) and
+        // for GTKLookAndFeel itself (Bazzite/KDE) — there's no reliable way to detect which L&F
+        // will hit this ahead of time, so Linux always gets Nimbus instead: it ships with every
+        // JDK (no native library dependency) and has consistently resolved fonts correctly in
+        // every environment tested so far.
         runCatching { UIManager.setLookAndFeel(NimbusLookAndFeel()) }
+    } else {
+        runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
     }
 
     val startDir = initialPath?.let(::File)?.takeIf { it.exists() }
