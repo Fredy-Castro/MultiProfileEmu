@@ -94,7 +94,23 @@ que hay que envolver el resultado de `createDistributable` a mano con
 (el build tiene que correr en el filesystem nativo de Linux — `/mnt/c/...` desde WSL falla al
 hacer `chmod`):
 
+> **Importante — qué JDK usar para compilar:** el JDK que corre este build es el que `jlink`
+> empaqueta dentro del runtime final, y **el OpenJDK que instala `apt` en Ubuntu/Debian tiene un
+> bug real** que deja `JFileChooser` (el selector de carpetas) completamente en blanco — se ven
+> los íconos y el layout, pero ningún texto (ni nombres de carpeta, ni "Abrir"/"Cancelar", nada).
+> Confirmado en hardware real (Bazzite/KDE, sesión Wayland vía XWayland): con el JDK de `apt`
+> queda roto, con el mismo código compilado con [Eclipse
+> Temurin](https://adoptium.net/temurin/releases/?version=17) se ve perfecto. Usá Temurin (o
+> cualquier build "vendor-neutral" — no el de Ubuntu) para este paso:
+> ```bash
+> curl -sL -o temurin17.tar.gz 'https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse?project=jdk'
+> mkdir temurin17 && tar xzf temurin17.tar.gz -C temurin17 --strip-components=1
+> export JAVA_HOME="$(pwd)/temurin17"
+> ```
+
 ```bash
+rm -rf desktopApp/build/compose   # si ya habías compilado antes con otro JDK — createRuntimeImage
+                                   # queda cacheado y no se re-genera solo por cambiar JAVA_HOME
 ./gradlew :desktopApp:createDistributable
 # arma un AppDir: copiá la salida de build/compose/binaries/main/app/MultiProfileEmu/ a un AppDir/,
 # agregá AppRun (exec bin/MultiProfileEmu), un .desktop, y un ícono en la raíz del AppDir

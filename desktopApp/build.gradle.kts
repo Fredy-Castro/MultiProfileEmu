@@ -26,6 +26,13 @@ compose.desktop {
             packageVersion = "1.0.0"
             description = "Perfiles de save intercambiables para emuladores compartidos en familia"
 
+            // IMPORTANT (Linux only): whichever JDK runs this Gradle build is the one jlink bakes
+            // into the packaged runtime image — it must be a vendor-neutral build (e.g. Eclipse
+            // Temurin), NOT Ubuntu/Debian's apt-packaged OpenJDK. Confirmed on real hardware
+            // (Bazzite/KDE): a jlink'd Ubuntu-packaged OpenJDK 17 renders JFileChooser with every
+            // label/button/filename blank (icons and layout still show), while the exact same code
+            // built with Temurin 17 renders it correctly. See README's AppImage section.
+
             // jlink's automatic module detection (jdeps) can't see LWJGL's reflective use of
             // sun.misc.Unsafe, so it strips jdk.unsupported out of the packaged runtime image —
             // the app still launches fine, but the gamepad thread dies silently in the background
