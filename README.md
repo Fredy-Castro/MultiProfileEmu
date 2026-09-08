@@ -28,7 +28,8 @@ Funcional en **Windows, Linux y Android**:
 - **Sincronización cloud con Google Drive** (vía rclone real, no una reimplementación): crear
   remotos desde Configuración y, por perfil, subir/bajar/sincronizar en dos vías (`bisync`) contra
   una carpeta de Drive — ver "Sincronización cloud (rclone)" abajo, especialmente el paso manual
-  necesario para compilar Android.
+  necesario para compilar (rclone viene empaquetado dentro de la app en las tres plataformas, pero
+  el binario no se commitea al repo).
 
 Presets de rutas por emulador y modo root en Android son la siguiente iteración — ver "Roadmap".
 
@@ -68,6 +69,10 @@ androidApp/    → punto de entrada Android (MainActivity) + manifest/recursos +
 ## Cómo empaquetarlo
 
 ### Desktop
+
+> Antes de empaquetar, colocá el binario de rclone correspondiente bajo `desktopApp/resources/` —
+> ver "Sincronización cloud (rclone)" más abajo. Sin eso, la app empaquetada sigue funcionando pero
+> cae a buscar `rclone` en el `PATH` del sistema en vez de traerlo empaquetado.
 
 ```bash
 ./gradlew :desktopApp:packageMsi   # Windows — instalador .msi por usuario (sin admin/UAC)
@@ -194,10 +199,32 @@ usuario), en la carpeta fija de datos — no se mueve si migrás la carpeta home
 
 ### Desktop
 
-Necesita `rclone` instalado y en el `PATH` del sistema (no lo descarga ni lo empaqueta la app):
-[rclone.org/downloads](https://rclone.org/downloads/). Si falta, Configuración lo indica en vez de
-fallar. Crear un remoto abre el flujo de autorización propio de rclone (navegador + servidor
-local); la app solo espera a que termine.
+Viene empaquetado dentro del `.msi`/`.deb`/AppImage (`DesktopRcloneRunner` lo busca primero ahí,
+vía el mecanismo `appResourcesRootDir` de Compose Desktop — ver `desktopApp/build.gradle.kts`) —
+no hace falta instalarlo aparte. Si por algún motivo no está empaquetado, cae a buscar `rclone` en
+el `PATH` del sistema; Configuración lo indica en vez de fallar si ninguno de los dos funciona.
+
+Igual que con Android más abajo, **el binario no se commitea al repo** (pesa ~20-40 MB por
+sistema operativo). Antes de generar el `.msi`/`.deb`/AppImage hay que colocarlo a mano una vez:
+
+```bash
+# Windows — para desktopApp/resources/windows/rclone.exe
+curl -LO https://downloads.rclone.org/rclone-current-windows-amd64.zip
+unzip -j rclone-current-windows-amd64.zip "*/rclone.exe" -d desktopApp/resources/windows/
+
+# Linux — para desktopApp/resources/linux/rclone
+curl -LO https://downloads.rclone.org/rclone-current-linux-amd64.zip
+unzip -j rclone-current-linux-amd64.zip "*/rclone" -d desktopApp/resources/linux/
+chmod +x desktopApp/resources/linux/rclone
+```
+
+(`resources/<os>/` es el nombre de carpeta que Compose reconoce para empaquetar un archivo solo en
+el instalador de ese sistema operativo — no hace falta lógica condicional en el build script.
+`./gradlew :desktopApp:run` sigue sin usar el binario empaquetado — esa system property solo existe
+en el app ya empaquetado — así que en desarrollo sigue haciendo falta `rclone` en el `PATH`.)
+
+Crear un remoto abre el flujo de autorización propio de rclone (navegador + servidor local); la
+app solo espera a que termine.
 
 ### Android
 
@@ -207,7 +234,7 @@ dentro del APK bajo `jniLibs/`, y **ese binario no se commitea al repo** (pesa ~
 compilar `androidApp` hay que colocarlo a mano una vez:
 
 ```bash
-curl -LO https://github.com/rclone/rclone/releases/latest/download/rclone-current-linux-arm64.zip
+curl -LO https://downloads.rclone.org/rclone-current-linux-arm64.zip
 unzip -j rclone-current-linux-arm64.zip "*/rclone" -d androidApp/src/main/jniLibs/arm64-v8a/
 mv androidApp/src/main/jniLibs/arm64-v8a/rclone androidApp/src/main/jniLibs/arm64-v8a/librclone.so
 ```

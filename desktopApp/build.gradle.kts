@@ -43,6 +43,16 @@ compose.desktop {
             // bypasses jdeps detection entirely and just bundles every JDK module instead.
             includeAllModules = true
 
+            // Bundles rclone directly into the package so people don't have to install it
+            // themselves (a real pain point on Linux especially). Compose's own mechanism for
+            // this: files under resources/<os>/ get copied into the packaged app and are only
+            // included in the installer for that OS — resources/windows/rclone.exe only goes
+            // into the .msi, resources/linux/rclone only into the .deb/AppImage. At runtime,
+            // DesktopRcloneRunner looks for it via the "compose.application.resources.dir"
+            // system property Compose sets. The binaries themselves aren't committed (see
+            // .gitignore) — README has the download commands to place them before packaging.
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
+
             windows {
                 // Per-user install: no admin/UAC prompt needed, matches how most consumer desktop
                 // apps install today. Installs to the current user's AppData instead of Program Files.

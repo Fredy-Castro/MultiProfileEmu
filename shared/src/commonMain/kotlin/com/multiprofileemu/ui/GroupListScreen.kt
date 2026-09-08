@@ -282,8 +282,9 @@ private fun CloudRemotesSection(controller: AppController) {
     Text("Remotos cloud", style = MaterialTheme.typography.labelLarge)
     if (!rcloneAvailable) {
         Text(
-            "rclone no está instalado. Instalalo desde rclone.org/downloads y asegurate de que " +
-                "esté disponible en el PATH del sistema.",
+            "No se pudo iniciar rclone. Si compilaste esta app vos mismo, revisá que el binario " +
+                "haya quedado empaquetado; si no, instalalo desde rclone.org/downloads y " +
+                "asegurate de que esté disponible en el PATH del sistema.",
         )
         TextButton(onClick = { refreshTrigger++ }) { Text("Reintentar") }
     } else {
