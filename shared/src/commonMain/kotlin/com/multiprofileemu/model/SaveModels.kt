@@ -31,4 +31,6 @@ data class SaveGroup(
     val emulatorHint: String? = null,
     val profiles: List<SaveProfile> = emptyList(),
     val activeProfileId: String? = null,
+    /** Cloud sync configured directly against [activeFolderPath], independent of any profile. */
+    val activeCloudSync: CloudSyncConfig? = null,
 )

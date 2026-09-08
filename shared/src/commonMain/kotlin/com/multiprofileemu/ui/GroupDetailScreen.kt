@@ -178,6 +178,13 @@ fun GroupDetailScreen(
                 FirstUseBanner(onCapture = { pendingDialog = DetailDialog.CaptureActive })
             }
 
+            if (supportsCloudSync) {
+                ActiveCloudSyncCard(
+                    config = group.activeCloudSync,
+                    onOpenDialog = { pendingDialog = DetailDialog.ActiveCloudSync },
+                )
+            }
+
             cloudSyncError?.let { error ->
                 ErrorBanner(message = error, onDismiss = { cloudSyncError = null })
             }
@@ -256,8 +263,9 @@ fun GroupDetailScreen(
         )
         is DetailDialog.CloudSync -> CloudSyncDialog(
             controller = controller,
-            groupName = group.name,
-            profile = dialog.profile,
+            title = "Sincronización cloud — ${dialog.profile.name}",
+            existingConfig = dialog.profile.cloudSync,
+            defaultRemotePathSuggestion = "MultiProfileEmu/${group.name}/${dialog.profile.name}",
             onDismiss = { pendingDialog = null },
             onConfirm = { config ->
                 pendingDialog = null
@@ -271,6 +279,21 @@ fun GroupDetailScreen(
                 }
             },
         )
+        DetailDialog.ActiveCloudSync -> CloudSyncDialog(
+            controller = controller,
+            title = "Sincronización cloud — Carpeta activa",
+            existingConfig = group.activeCloudSync,
+            defaultRemotePathSuggestion = "MultiProfileEmu/${group.name}",
+            onDismiss = { pendingDialog = null },
+            onConfirm = { config ->
+                pendingDialog = null
+                // Same reasoning as the profile case above: run on this screen's scope, not the
+                // dialog's, so the result survives the dialog closing.
+                scope.launch {
+                    cloudSyncError = controller.runActiveCloudSync(group.id, config)
+                }
+            },
+        )
     }
 }
 
@@ -280,6 +303,7 @@ private sealed interface DetailDialog {
     data class RenameProfile(val profile: SaveProfile) : DetailDialog
     data class DuplicateProfile(val profile: SaveProfile) : DetailDialog
     data class CloudSync(val profile: SaveProfile) : DetailDialog
+    data object ActiveCloudSync : DetailDialog
 }
 
 @Composable
@@ -298,18 +322,19 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun CloudSyncDialog(
     controller: AppController,
-    groupName: String,
-    profile: SaveProfile,
+    title: String,
+    existingConfig: CloudSyncConfig?,
+    defaultRemotePathSuggestion: String,
     onDismiss: () -> Unit,
     onConfirm: (CloudSyncConfig) -> Unit,
 ) {
     var remotes by remember { mutableStateOf<List<String>>(emptyList()) }
     var loadingRemotes by remember { mutableStateOf(true) }
-    var selectedRemote by remember { mutableStateOf(profile.cloudSync?.remoteName) }
+    var selectedRemote by remember { mutableStateOf(existingConfig?.remoteName) }
     var remotePath by remember {
-        mutableStateOf(profile.cloudSync?.remotePath ?: "MultiProfileEmu/$groupName/${profile.name}")
+        mutableStateOf(existingConfig?.remotePath ?: defaultRemotePathSuggestion)
     }
-    var mode by remember { mutableStateOf(profile.cloudSync?.mode ?: CloudSyncMode.UPLOAD) }
+    var mode by remember { mutableStateOf(existingConfig?.mode ?: CloudSyncMode.UPLOAD) }
 
     LaunchedEffect(Unit) {
         remotes = controller.listCloudRemotes()
@@ -319,11 +344,10 @@ private fun CloudSyncDialog(
 
     fun confirm() {
         val remote = selectedRemote ?: return
-        val existing = profile.cloudSync
-        val everResynced = if (existing != null && existing.remoteName == remote &&
-            existing.remotePath == remotePath && existing.mode == mode
+        val everResynced = if (existingConfig != null && existingConfig.remoteName == remote &&
+            existingConfig.remotePath == remotePath && existingConfig.mode == mode
         ) {
-            existing.everResynced
+            existingConfig.everResynced
         } else {
             false
         }
@@ -339,7 +363,7 @@ private fun CloudSyncDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Sincronización cloud — ${profile.name}") },
+        title = { Text(title) },
         text = {
             Column {
                 when {
@@ -395,6 +419,33 @@ private fun CloudSyncDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
+}
+
+/**
+ * Lets people who don't care about profiles at all sync the emulator's live save folder
+ * ([SaveGroup.activeFolderPath]) straight to the cloud — no profile needs to be captured first.
+ * Always visible (when cloud sync is supported), independent of [FirstUseBanner]/profile state.
+ */
+@Composable
+private fun ActiveCloudSyncCard(config: CloudSyncConfig?, onOpenDialog: () -> Unit) {
+    Card(Modifier.fillMaxWidth().padding(12.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Sincronización cloud de la carpeta activa", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            if (config == null) {
+                Text(
+                    "Sincronizá el contenido de la carpeta activa directamente con Google Drive, " +
+                        "sin necesidad de crear perfiles.",
+                )
+            } else {
+                Text("Remoto: ${config.remoteName}:${config.remotePath}")
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onOpenDialog) {
+                Text(if (config == null) "Configurar sincronización" else "Sincronizar ahora")
+            }
+        }
+    }
 }
 
 @Composable

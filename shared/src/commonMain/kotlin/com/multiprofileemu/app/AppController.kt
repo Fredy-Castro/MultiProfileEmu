@@ -142,44 +142,78 @@ class AppController(
     suspend fun deleteCloudRemote(name: String) = runExclusive { cloudSyncEngine.deleteRemote(name) }
 
     /**
+     * Runs rclone sync/bisync for [config] against [localPath], then persists the config (with
+     * updated last-synced/resync bookkeeping) via [persistConfig]. Shared by per-profile cloud
+     * sync and the group's active-folder cloud sync below — they differ only in which path gets
+     * synced and where the resulting config is stored, not in the sync/bookkeeping logic itself.
+     * Returns an error message, or null on success.
+     */
+    private suspend fun performCloudSync(
+        localPath: String,
+        config: CloudSyncConfig,
+        persistConfig: (List<SaveGroup>, CloudSyncConfig) -> List<SaveGroup>,
+    ): String? {
+        val resync = config.mode == CloudSyncMode.BISYNC && !config.everResynced
+        val error = cloudSyncEngine.sync(
+            localPath = localPath,
+            remoteName = config.remoteName,
+            remotePath = config.remotePath,
+            mode = config.mode,
+            resync = resync,
+            onProgress = { progress -> _busy.value = progress },
+        )
+        val finalConfig = if (error == null) {
+            config.copy(
+                lastSyncedEpochMs = currentEpochMillis(),
+                everResynced = config.everResynced || config.mode == CloudSyncMode.BISYNC,
+            )
+        } else {
+            config
+        }
+        persist(persistConfig(_groups.value, finalConfig))
+        return error
+    }
+
+    /**
      * Persists [config] onto the profile and immediately runs the sync it describes — one step,
      * same pattern as "Crear"/"Capturar" elsewhere: configuring and doing are the same action.
-     * Returns an error message, or null on success.
      */
     suspend fun runCloudSync(groupId: String, profileId: String, config: CloudSyncConfig): String? = runExclusive {
         try {
-            val groups = _groups.value
-            val group = groups.firstOrNull { it.id == groupId }
+            val group = _groups.value.firstOrNull { it.id == groupId }
             if (group == null) {
                 "No se encontró el grupo."
             } else {
                 val localPath = swapEngine.storagePathFor(groupId, profileId)
-                val resync = config.mode == CloudSyncMode.BISYNC && !config.everResynced
-                val error = cloudSyncEngine.sync(
-                    localPath = localPath,
-                    remoteName = config.remoteName,
-                    remotePath = config.remotePath,
-                    mode = config.mode,
-                    resync = resync,
-                    onProgress = { progress -> _busy.value = progress },
-                )
-                val finalConfig = if (error == null) {
-                    config.copy(
-                        lastSyncedEpochMs = currentEpochMillis(),
-                        everResynced = config.everResynced || config.mode == CloudSyncMode.BISYNC,
-                    )
-                } else {
-                    config
-                }
-                val updated = groups.map { g ->
-                    if (g.id != groupId) {
-                        g
-                    } else {
-                        g.copy(profiles = g.profiles.map { p -> if (p.id == profileId) p.copy(cloudSync = finalConfig) else p })
+                performCloudSync(localPath, config) { groups, finalConfig ->
+                    groups.map { g ->
+                        if (g.id != groupId) {
+                            g
+                        } else {
+                            g.copy(profiles = g.profiles.map { p -> if (p.id == profileId) p.copy(cloudSync = finalConfig) else p })
+                        }
                     }
                 }
-                persist(updated)
-                error
+            }
+        } finally {
+            _busy.value = null
+        }
+    }
+
+    /**
+     * Same idea as [runCloudSync], but for people who don't want to deal with profiles at all:
+     * syncs [SaveGroup.activeFolderPath] itself against the cloud remote, straight from the emulator's
+     * live save location — no profile needs to exist first.
+     */
+    suspend fun runActiveCloudSync(groupId: String, config: CloudSyncConfig): String? = runExclusive {
+        try {
+            val group = _groups.value.firstOrNull { it.id == groupId }
+            if (group == null) {
+                "No se encontró el grupo."
+            } else {
+                performCloudSync(group.activeFolderPath, config) { groups, finalConfig ->
+                    groups.map { g -> if (g.id == groupId) g.copy(activeCloudSync = finalConfig) else g }
+                }
             }
         } finally {
             _busy.value = null
