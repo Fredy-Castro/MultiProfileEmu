@@ -11,6 +11,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -27,6 +28,7 @@ import com.multiprofileemu.input.GamepadController
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.launch
 
 private sealed interface Route {
     data object GroupList : Route
@@ -51,7 +53,9 @@ fun App(
     MaterialTheme {
         Surface {
             var route by remember { mutableStateOf<Route>(Route.GroupList) }
+            val scope = rememberCoroutineScope()
             val busy by controller.busy.collectAsState()
+            val pendingConflicts by controller.pendingConflicts.collectAsState()
             // Read via a stable State reference (not the `busy` value itself) so this flow, built
             // once, still sees up-to-date busy-ness on every action — recreating the flow here on
             // every busy change would drop whatever screen's LaunchedEffect(actions) was collecting.
@@ -116,6 +120,14 @@ fun App(
                 }
 
                 busy?.let { progress -> BusyOverlay(progress) }
+
+                pendingConflicts?.let { pending ->
+                    ConflictResolutionDialog(
+                        pending = pending,
+                        onDismiss = { controller.dismissPendingConflicts() },
+                        onResolve = { resolutions -> scope.launch { controller.resolveConflicts(resolutions) } },
+                    )
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import com.multiprofileemu.domain.CloudSyncEngine
 import com.multiprofileemu.domain.OperationPhase
 import com.multiprofileemu.domain.OperationProgress
 import com.multiprofileemu.domain.ProfileSwapEngine
+import com.multiprofileemu.domain.SyncConflict
 import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.SaveGroup
@@ -59,6 +60,18 @@ class AppController(
     /** Lets callers outside [AppController] (e.g. home-folder migration) drive the same busy overlay. */
     fun reportProgress(progress: OperationProgress?) {
         _busy.value = progress
+    }
+
+    // Non-null right after a BISYNC leaves unresolved conflict-pairs behind (see
+    // CloudSyncEngine.findConflicts) — the UI shows a popup letting the user pick a winner per
+    // file. Global rather than per-screen for the same reason [_busy] is: the sync that surfaced
+    // it may have been triggered from a screen the user has since navigated away from.
+    private val _pendingConflicts = MutableStateFlow<PendingConflicts?>(null)
+    val pendingConflicts: StateFlow<PendingConflicts?> = _pendingConflicts.asStateFlow()
+
+    /** Discards the popup without resolving anything — the .local/.cloud files are left as-is. */
+    fun dismissPendingConflicts() {
+        _pendingConflicts.value = null
     }
 
     val cloudSyncAvailable: Boolean get() = cloudSyncEngine.isRcloneAvailable()
@@ -151,6 +164,7 @@ class AppController(
     private suspend fun performCloudSync(
         localPath: String,
         config: CloudSyncConfig,
+        force: Boolean = false,
         persistConfig: (List<SaveGroup>, CloudSyncConfig) -> List<SaveGroup>,
     ): String? {
         val resync = config.mode == CloudSyncMode.BISYNC && !config.everResynced
@@ -160,6 +174,7 @@ class AppController(
             remotePath = config.remotePath,
             mode = config.mode,
             resync = resync,
+            force = force,
             onProgress = { progress -> _busy.value = progress },
         )
         val finalConfig = if (error == null) {
@@ -178,14 +193,36 @@ class AppController(
      * Persists [config] onto the profile and immediately runs the sync it describes — one step,
      * same pattern as "Crear"/"Capturar" elsewhere: configuring and doing are the same action.
      */
-    suspend fun runCloudSync(groupId: String, profileId: String, config: CloudSyncConfig): String? = runExclusive {
+    suspend fun runCloudSync(groupId: String, profileId: String, config: CloudSyncConfig): String? =
+        runExclusive { runCloudSyncLocked(groupId, profileId, config) }
+
+    /**
+     * Same idea as [runCloudSync], but for people who don't want to deal with profiles at all:
+     * syncs [SaveGroup.activeFolderPath] itself against the cloud remote, straight from the emulator's
+     * live save location — no profile needs to exist first.
+     */
+    suspend fun runActiveCloudSync(groupId: String, config: CloudSyncConfig): String? =
+        runExclusive { runActiveCloudSyncLocked(groupId, config) }
+
+    // The two functions above split a thin public entry point from the "Locked" body below so
+    // that resolveConflicts() — which already holds the mutex via its own runExclusive — can call
+    // the body directly to re-run the sync after resolving. Calling the public function instead
+    // would try to take [mutex] a second time from inside runExclusive's own withLock and deadlock
+    // (kotlinx.coroutines.sync.Mutex is not reentrant).
+
+    private suspend fun runCloudSyncLocked(
+        groupId: String,
+        profileId: String,
+        config: CloudSyncConfig,
+        force: Boolean = false,
+    ): String? {
         try {
             val group = _groups.value.firstOrNull { it.id == groupId }
-            if (group == null) {
+            return if (group == null) {
                 "No se encontró el grupo."
             } else {
                 val localPath = swapEngine.storagePathFor(groupId, profileId)
-                performCloudSync(localPath, config) { groups, finalConfig ->
+                val error = performCloudSync(localPath, config, force) { groups, finalConfig ->
                     groups.map { g ->
                         if (g.id != groupId) {
                             g
@@ -194,29 +231,78 @@ class AppController(
                         }
                     }
                 }
+                if (error == null) checkForConflicts(groupId, profileId, localPath, config)
+                error
             }
         } finally {
             _busy.value = null
         }
     }
 
-    /**
-     * Same idea as [runCloudSync], but for people who don't want to deal with profiles at all:
-     * syncs [SaveGroup.activeFolderPath] itself against the cloud remote, straight from the emulator's
-     * live save location — no profile needs to exist first.
-     */
-    suspend fun runActiveCloudSync(groupId: String, config: CloudSyncConfig): String? = runExclusive {
+    private suspend fun runActiveCloudSyncLocked(groupId: String, config: CloudSyncConfig, force: Boolean = false): String? {
         try {
             val group = _groups.value.firstOrNull { it.id == groupId }
-            if (group == null) {
+            return if (group == null) {
                 "No se encontró el grupo."
             } else {
-                performCloudSync(group.activeFolderPath, config) { groups, finalConfig ->
+                val error = performCloudSync(group.activeFolderPath, config, force) { groups, finalConfig ->
                     groups.map { g -> if (g.id == groupId) g.copy(activeCloudSync = finalConfig) else g }
                 }
+                if (error == null) checkForConflicts(groupId, null, group.activeFolderPath, config)
+                error
+            }
+        } finally {
+            _busy.value = null
+        }
+    }
+
+    /** After a successful BISYNC, surfaces any conflicts left in [localPath] via [pendingConflicts]. */
+    private suspend fun checkForConflicts(groupId: String, profileId: String?, localPath: String, config: CloudSyncConfig) {
+        if (config.mode != CloudSyncMode.BISYNC) return
+        val conflicts = cloudSyncEngine.findConflicts(localPath)
+        if (conflicts.isNotEmpty()) {
+            _pendingConflicts.value = PendingConflicts(groupId, profileId, localPath, config, conflicts)
+        }
+    }
+
+    /**
+     * Applies each entry of [resolutions] (keyed by [SyncConflict.relativePath], true = keep the
+     * local version) via [CloudSyncEngine.resolveConflict], then re-runs the same sync that
+     * surfaced the conflicts so the resolution — and the deletion of the leftover .local/.cloud
+     * copies — propagates to the other side. Returns the first error encountered, or null.
+     */
+    suspend fun resolveConflicts(resolutions: Map<String, Boolean>): String? = runExclusive {
+        val pending = _pendingConflicts.value ?: return@runExclusive null
+        try {
+            for (conflict in pending.conflicts) {
+                val keepLocal = resolutions[conflict.relativePath] ?: continue
+                val error = cloudSyncEngine.resolveConflict(pending.localPath, conflict, keepLocal)
+                if (error != null) return@runExclusive error
+            }
+            _pendingConflicts.value = null
+            // force=true: the deletions this follow-up sync propagates (the losing conflict
+            // copies on the other side) are exactly what the user just chose above — not an
+            // unreviewed mass deletion, so bisync's own delete-count safety abort would otherwise
+            // trip on nothing more than a small save folder having few total files.
+            if (pending.profileId != null) {
+                runCloudSyncLocked(pending.groupId, pending.profileId, pending.config, force = true)
+            } else {
+                runActiveCloudSyncLocked(pending.groupId, pending.config, force = true)
             }
         } finally {
             _busy.value = null
         }
     }
 }
+
+/**
+ * @param profileId null means [localPath] is the group's active folder rather than a profile's
+ * storage — mirrors the split between [AppController.runCloudSync] and [AppController.runActiveCloudSync].
+ */
+data class PendingConflicts(
+    val groupId: String,
+    val profileId: String?,
+    val localPath: String,
+    val config: CloudSyncConfig,
+    val conflicts: List<SyncConflict>,
+)

@@ -3,6 +3,7 @@ package com.multiprofileemu.domain
 import com.multiprofileemu.cloud.RcloneRunner
 import com.multiprofileemu.model.CloudSyncMode
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -11,6 +12,12 @@ private data class RcloneLogLine(val stats: RcloneStats? = null, val level: Stri
 
 @Serializable
 private data class RcloneStats(val bytes: Long = 0, val totalBytes: Long = 0, val lastError: String? = null)
+
+@Serializable
+private data class LsJsonEntry(
+    @SerialName("Path") val path: String,
+    @SerialName("ModTime") val modTime: String? = null,
+)
 
 /**
  * Drives the real `rclone` binary (via [RcloneRunner]) for everything cloud-related: creating a
@@ -73,6 +80,13 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
      * @param resync only meaningful for [CloudSyncMode.BISYNC] — must be true the very first time
      * a given local/remote pair syncs (rclone bisync requires an initial `--resync` to establish
      * its baseline listings; every run after that omits it).
+     * @param force only meaningful for [CloudSyncMode.BISYNC]. Bypasses bisync's own built-in
+     * safety aborts ("too many deletes", "all files changed"), which trip easily in a save folder
+     * with only a handful of files — resolving even one conflict deletes two conflict-suffixed
+     * copies out of a small total. Only ever pass true for the follow-up sync right after
+     * [resolveConflict] calls the user already explicitly made in the conflict-resolution dialog —
+     * never for a regular/first-time sync, where these guards are exactly what should stop an
+     * unintended mass deletion (e.g. an unmounted remote looking like everything got deleted).
      */
     suspend fun sync(
         localPath: String,
@@ -80,6 +94,7 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         remotePath: String,
         mode: CloudSyncMode,
         resync: Boolean,
+        force: Boolean = false,
         onProgress: (OperationProgress) -> Unit,
     ): String? {
         val remote = "$remoteName:$remotePath"
@@ -98,9 +113,15 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
                 }
                 CloudSyncMode.BISYNC -> {
                     add("bisync"); add(localPath); add(remote)
-                    add("--conflict-resolve"); add("newer")
-                    add("--conflict-loser"); add("num")
+                    // "none" means bisync doesn't pick a winner on its own: both conflicting
+                    // versions get renamed (with --conflict-suffix) and copied to BOTH sides,
+                    // which is what lets findConflicts()/resolveConflict() below detect and
+                    // resolve conflicts by inspecting localPath alone, without ever needing to
+                    // list the remote side directly.
+                    add("--conflict-resolve"); add("none")
+                    add("--conflict-suffix"); add("$LOCAL_CONFLICT_SUFFIX,$CLOUD_CONFLICT_SUFFIX")
                     if (resync) add("--resync")
+                    if (force) add("--force")
                 }
             }
             add("--use-json-log")
@@ -128,8 +149,72 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         return if (exitCode == 0) null else lastErrorLine ?: "rclone terminó con un error (código $exitCode)."
     }
 
+    /**
+     * Scans [localPath] for `.$LOCAL_CONFLICT_SUFFIX<N>`/`.$CLOUD_CONFLICT_SUFFIX<N>` pairs left
+     * behind by a BISYNC run (see the comment on `--conflict-resolve` in [sync]). Confirmed against
+     * the real binary that rclone always appends a number after the custom suffix we pass (e.g.
+     * `save.dat.local1`/`save.dat.cloud1`, matching its own default "conflict1"/"conflict2"
+     * numbering) — so this matches by regex rather than assuming an exact `.local`/`.cloud` suffix.
+     * Only ever meaningful after a successful BISYNC — UPLOAD/DOWNLOAD never produce these.
+     */
+    suspend fun findConflicts(localPath: String): List<SyncConflict> {
+        val output = StringBuilder()
+        runner.run(listOf("lsjson", "-R", "--files-only", localPath)) { line -> output.append(line) }
+        val entries = try {
+            json.decodeFromString<List<LsJsonEntry>>(output.toString())
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        return entries.mapNotNull { entry ->
+            if (!LOCAL_SUFFIX_REGEX.containsMatchIn(entry.path)) return@mapNotNull null
+            val relativePath = LOCAL_SUFFIX_REGEX.replace(entry.path, "")
+            val cloudEntry = entries.firstOrNull {
+                CLOUD_SUFFIX_REGEX.containsMatchIn(it.path) && CLOUD_SUFFIX_REGEX.replace(it.path, "") == relativePath
+            } ?: return@mapNotNull null
+            SyncConflict(
+                relativePath = relativePath,
+                localConflictPath = entry.path,
+                cloudConflictPath = cloudEntry.path,
+                localModified = entry.modTime?.let(::formatModTime),
+                cloudModified = cloudEntry.modTime?.let(::formatModTime),
+            )
+        }
+    }
+
+    /**
+     * Renames the winning side's copy back to [SyncConflict.relativePath] and deletes the losing
+     * one — both plain local operations against [localPath]. Nothing is pushed to the remote here;
+     * the caller is expected to run [sync] again afterwards so the resolution (and the deletion of
+     * the leftover conflict copies) propagates the same way any other change would.
+     */
+    suspend fun resolveConflict(localPath: String, conflict: SyncConflict, keepLocal: Boolean): String? {
+        val winnerConflictPath = if (keepLocal) conflict.localConflictPath else conflict.cloudConflictPath
+        val loserConflictPath = if (keepLocal) conflict.cloudConflictPath else conflict.localConflictPath
+        val winnerPath = "$localPath/$winnerConflictPath"
+        val canonicalPath = "$localPath/${conflict.relativePath}"
+        val loserPath = "$localPath/$loserConflictPath"
+
+        val moveExit = runner.run(listOf("moveto", winnerPath, canonicalPath)) {}
+        if (moveExit != 0) {
+            return "No se pudo aplicar la resolución para ${conflict.relativePath}."
+        }
+        runner.run(listOf("deletefile", loserPath)) {}
+        return null
+    }
+
+    /** RFC3339 ("2026-09-08T14:32:10.48-05:00") trimmed to a readable "2026-09-08 14:32:10". */
+    private fun formatModTime(modTime: String): String =
+        modTime.take(19).replace('T', ' ')
+
     private companion object {
         const val FIVE_MINUTES_MS = 5 * 60 * 1000L
+        const val LOCAL_CONFLICT_SUFFIX = "local"
+        const val CLOUD_CONFLICT_SUFFIX = "cloud"
+        // rclone appends a number after whatever --conflict-suffix we pass (confirmed on the real
+        // binary: "save.dat" -> "save.dat.local1"/"save.dat.cloud1"), so matching needs a regex
+        // rather than a fixed ".local"/".cloud" suffix.
+        val LOCAL_SUFFIX_REGEX = Regex("""\.$LOCAL_CONFLICT_SUFFIX\d+$""")
+        val CLOUD_SUFFIX_REGEX = Regex("""\.$CLOUD_CONFLICT_SUFFIX\d+$""")
         // Must require the /auth path specifically — rclone also prints an earlier, informational
         // notice ("Make sure your Redirect URL is set to \"http://127.0.0.1:53682/\" in your
         // custom config.") whose bare "127.0.0.1:53682/" would otherwise match first and win,
