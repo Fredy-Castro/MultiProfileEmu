@@ -4,6 +4,14 @@ import kotlinx.serialization.Serializable
 
 enum class CloudSyncMode { UPLOAD, DOWNLOAD, BISYNC }
 
+/** Only meaningful when [CloudSyncConfig.mode] is [CloudSyncMode.BISYNC] — UPLOAD/DOWNLOAD are one-directional and never conflict. */
+enum class ConflictResolutionStrategy {
+    /** Both versions are kept side by side and the user picks a winner per file (see [com.multiprofileemu.domain.SyncConflict]). */
+    MANUAL,
+    /** rclone picks the more recently modified version automatically; the other is discarded. */
+    NEWEST,
+}
+
 @Serializable
 data class CloudSyncConfig(
     val remoteName: String,
@@ -12,6 +20,7 @@ data class CloudSyncConfig(
     /** True once a bisync `--resync` has succeeded for this pair — later runs skip it. */
     val everResynced: Boolean = false,
     val lastSyncedEpochMs: Long? = null,
+    val conflictResolution: ConflictResolutionStrategy = ConflictResolutionStrategy.MANUAL,
 )
 
 @Serializable

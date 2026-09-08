@@ -8,6 +8,7 @@ import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.domain.SyncConflict
 import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
+import com.multiprofileemu.model.ConflictResolutionStrategy
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.platform.openUrlInBrowser
 import com.multiprofileemu.util.currentEpochMillis
@@ -174,6 +175,7 @@ class AppController(
             remotePath = config.remotePath,
             mode = config.mode,
             resync = resync,
+            conflictResolution = config.conflictResolution,
             force = force,
             onProgress = { progress -> _busy.value = progress },
         )
@@ -256,9 +258,14 @@ class AppController(
         }
     }
 
-    /** After a successful BISYNC, surfaces any conflicts left in [localPath] via [pendingConflicts]. */
+    /**
+     * After a successful BISYNC using [ConflictResolutionStrategy.MANUAL], surfaces any conflicts
+     * left in [localPath] via [pendingConflicts]. NEWEST resolves everything on its own — rclone
+     * never leaves .local/.cloud pairs behind for that strategy, so there's nothing to detect.
+     */
     private suspend fun checkForConflicts(groupId: String, profileId: String?, localPath: String, config: CloudSyncConfig) {
         if (config.mode != CloudSyncMode.BISYNC) return
+        if (config.conflictResolution != ConflictResolutionStrategy.MANUAL) return
         val conflicts = cloudSyncEngine.findConflicts(localPath)
         if (conflicts.isNotEmpty()) {
             _pendingConflicts.value = PendingConflicts(groupId, profileId, localPath, config, conflicts)

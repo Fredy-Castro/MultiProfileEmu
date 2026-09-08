@@ -2,6 +2,7 @@ package com.multiprofileemu.domain
 
 import com.multiprofileemu.cloud.RcloneRunner
 import com.multiprofileemu.model.CloudSyncMode
+import com.multiprofileemu.model.ConflictResolutionStrategy
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -94,6 +95,7 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         remotePath: String,
         mode: CloudSyncMode,
         resync: Boolean,
+        conflictResolution: ConflictResolutionStrategy = ConflictResolutionStrategy.MANUAL,
         force: Boolean = false,
         onProgress: (OperationProgress) -> Unit,
     ): String? {
@@ -113,13 +115,21 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
                 }
                 CloudSyncMode.BISYNC -> {
                     add("bisync"); add(localPath); add(remote)
-                    // "none" means bisync doesn't pick a winner on its own: both conflicting
-                    // versions get renamed (with --conflict-suffix) and copied to BOTH sides,
-                    // which is what lets findConflicts()/resolveConflict() below detect and
-                    // resolve conflicts by inspecting localPath alone, without ever needing to
-                    // list the remote side directly.
-                    add("--conflict-resolve"); add("none")
-                    add("--conflict-suffix"); add("$LOCAL_CONFLICT_SUFFIX,$CLOUD_CONFLICT_SUFFIX")
+                    when (conflictResolution) {
+                        ConflictResolutionStrategy.MANUAL -> {
+                            // "none" means bisync doesn't pick a winner on its own: both
+                            // conflicting versions get renamed (with --conflict-suffix) and
+                            // copied to BOTH sides, which is what lets findConflicts()/
+                            // resolveConflict() below detect and resolve conflicts by inspecting
+                            // localPath alone, without ever needing to list the remote side.
+                            add("--conflict-resolve"); add("none")
+                            add("--conflict-suffix"); add("$LOCAL_CONFLICT_SUFFIX,$CLOUD_CONFLICT_SUFFIX")
+                        }
+                        ConflictResolutionStrategy.NEWEST -> {
+                            add("--conflict-resolve"); add("newer")
+                            add("--conflict-loser"); add("num")
+                        }
+                    }
                     if (resync) add("--resync")
                     if (force) add("--force")
                 }

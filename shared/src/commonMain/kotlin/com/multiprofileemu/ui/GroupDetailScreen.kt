@@ -47,6 +47,7 @@ import com.multiprofileemu.app.AppController
 import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
+import com.multiprofileemu.model.ConflictResolutionStrategy
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.model.SaveProfile
 import kotlinx.coroutines.flow.Flow
@@ -335,6 +336,9 @@ private fun CloudSyncDialog(
         mutableStateOf(existingConfig?.remotePath ?: defaultRemotePathSuggestion)
     }
     var mode by remember { mutableStateOf(existingConfig?.mode ?: CloudSyncMode.UPLOAD) }
+    var conflictResolution by remember {
+        mutableStateOf(existingConfig?.conflictResolution ?: ConflictResolutionStrategy.MANUAL)
+    }
 
     LaunchedEffect(Unit) {
         remotes = controller.listCloudRemotes()
@@ -357,6 +361,7 @@ private fun CloudSyncDialog(
                 remotePath = remotePath.trim(),
                 mode = mode,
                 everResynced = everResynced,
+                conflictResolution = conflictResolution,
             ),
         )
     }
@@ -404,6 +409,23 @@ private fun CloudSyncDialog(
                                     Button(onClick = { mode = candidate }) { Text(label) }
                                 } else {
                                     OutlinedButton(onClick = { mode = candidate }) { Text(label) }
+                                }
+                            }
+                        }
+                        if (mode == CloudSyncMode.BISYNC) {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Si un archivo cambió en ambos lados...", style = MaterialTheme.typography.labelLarge)
+                            Row {
+                                listOf(
+                                    ConflictResolutionStrategy.MANUAL to "Preguntarme",
+                                    ConflictResolutionStrategy.NEWEST to "Usar el más reciente",
+                                ).forEach { (candidate, label) ->
+                                    Spacer(Modifier.width(4.dp))
+                                    if (conflictResolution == candidate) {
+                                        Button(onClick = { conflictResolution = candidate }) { Text(label) }
+                                    } else {
+                                        OutlinedButton(onClick = { conflictResolution = candidate }) { Text(label) }
+                                    }
                                 }
                             }
                         }
