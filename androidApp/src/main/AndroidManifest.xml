@@ -7,6 +7,17 @@
          declare it. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- CloudSyncForegroundService: some devices cut ALL network access for backgrounded apps
+         with zero grace period (confirmed via dumpsys netpolicy on real hardware) — the Google
+         Drive OAuth flow inherently backgrounds this app the moment the browser takes the screen,
+         right as rclone needs to exchange the auth code for a token. A foreground service with a
+         visible notification is Android's sanctioned way to stay exempt from that. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Runtime-requested on API 33+ (see MainActivity) — without it the notification itself
+         won't show, though the foreground-service network exemption still applies. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:name="com.multiprofileemu.MultiProfileEmuApplication"
         android:allowBackup="true"
@@ -27,6 +38,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".CloudSyncForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

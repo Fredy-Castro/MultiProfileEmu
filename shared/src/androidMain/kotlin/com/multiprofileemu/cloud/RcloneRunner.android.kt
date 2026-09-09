@@ -11,13 +11,19 @@ import java.io.IOException
 import java.io.InputStreamReader
 
 /**
- * rclone has no official Android build, but its Linux releases are statically-linked Go binaries
- * with no dynamic linker dependency (verified: `file` reports "statically linked", no
- * `PT_INTERP`) — they run directly under Android's Linux kernel with no root needed, the same way
- * they'd run on any other Linux box. Running an arbitrary downloaded binary on API 29+ is blocked
- * by W^X/SELinux, though, so the only way to actually execute one is to ship it as a fake native
- * library under `jniLibs/<abi>/librclone.so` — Android extracts those at install time with
- * execute permission already granted, which is exactly what a real .so needs too.
+ * rclone has no official Android build, so this ships one built from source (see README's Android
+ * section for the exact `go build` invocation): `GOOS=android GOARCH=arm64 CGO_ENABLED=1`, using
+ * the Android NDK's clang so it links against bionic instead of Go's pure-Go resolver. That part
+ * matters more than it sounds — the plain upstream `linux-arm64` release binary runs fine under
+ * Android's kernel (verified: no root needed, no SELinux issue) but its DNS resolution is
+ * completely broken there: Go's pure-Go resolver reads `/etc/resolv.conf`, which doesn't exist on
+ * Android (DNS is resolved through the platform's own framework instead), so every hostname lookup
+ * fails with "dial tcp: lookup ... on [::1]:53: connection refused". The bionic-linked build uses
+ * Android's real resolver via cgo and doesn't have this problem. Running an arbitrary downloaded
+ * binary on API 29+ is blocked by W^X/SELinux regardless, so the only way to actually execute one
+ * is to ship it as a fake native library under `jniLibs/<abi>/librclone.so` — Android extracts
+ * those at install time with execute permission already granted, which is exactly what a real .so
+ * needs too.
  */
 class AndroidRcloneRunner(context: Context, private val configPath: String) : RcloneRunner {
     private val binaryPath = File(context.applicationInfo.nativeLibraryDir, "librclone.so").path

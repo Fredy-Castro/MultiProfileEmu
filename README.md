@@ -230,22 +230,57 @@ app solo espera a que termine.
 
 Android no tiene "un PATH del sistema" ni permite ejecutar binarios descargados en runtime (API
 29+ lo bloquea por SELinux/W^X) — la única forma de correr un binario nativo real es empaquetarlo
-dentro del APK bajo `jniLibs/`, y **ese binario no se commitea al repo** (pesa ~75 MB). Antes de
-compilar `androidApp` hay que colocarlo a mano una vez:
+dentro del APK bajo `jniLibs/`, y **ese binario no se commitea al repo** (pesa ~80 MB). El nombre
+`librclone.so` es obligatorio — Android solo extrae con permiso de ejecución los archivos bajo
+`jniLibs/` que respetan esa convención.
 
-```bash
-curl -LO https://downloads.rclone.org/rclone-current-linux-arm64.zip
-unzip -j rclone-current-linux-arm64.zip "*/rclone" -d androidApp/src/main/jniLibs/arm64-v8a/
-mv androidApp/src/main/jniLibs/arm64-v8a/rclone androidApp/src/main/jniLibs/arm64-v8a/librclone.so
-```
-
-(el nombre `librclone.so` es obligatorio — Android solo extrae con permiso de ejecución los
-archivos bajo `jniLibs/` que respetan esa convención; internamente sigue siendo el binario de
-rclone para Linux, no una librería nativa real — pero es un binario Go estático, sin dependencia de
-glibc/bionic, así que corre nativo bajo el kernel de Android sin root).
+> **Importante — hay que compilarlo desde el código fuente, NO usar el binario oficial de
+> `linux-arm64`:** el release oficial de rclone para Linux es un binario Go estático que corre
+> nativo bajo el kernel de Android sin problema, **pero falla toda operación de red** ("dial tcp:
+> lookup ... on \[::1]:53: connection refused"). La causa: el resolver de DNS puro de Go (el que
+> usa un binario `GOOS=linux` sin cgo) lee `/etc/resolv.conf`, que en Android no existe — Android
+> resuelve DNS por su propio framework, no por ese archivo. Sin él, el resolver cae a
+> `localhost:53`, donde no hay nada escuchando. Confirmado en hardware real: falla exactamente
+> igual al crear un remoto (falla el intercambio del token de OAuth) como al sincronizar. La única
+> solución sin root es compilar apuntando a `GOOS=android` con `CGO_ENABLED=1` — así el binario
+> queda enlazado contra bionic (la libc de Android) y usa su resolver nativo real.
+>
+> Requiere el [Android NDK](https://developer.android.com/ndk) (ya viene con Android Studio, o
+> `sdkmanager --install "ndk;27.1.12297006"`) y el compilador de [Go](https://go.dev/dl/) (versión
+> igual o mayor a la que pide `go.mod` en la raíz del repo de rclone). Con eso:
+>
+> ```bash
+> git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git
+> cd rclone
+> export GOOS=android GOARCH=arm64 CGO_ENABLED=1
+> export CC="$ANDROID_NDK/toolchains/llvm/prebuilt/<host>/bin/aarch64-linux-android26-clang"
+> go build -trimpath -ldflags "-s -w" -o librclone.so .
+> cp librclone.so <ruta-del-repo>/androidApp/src/main/jniLibs/arm64-v8a/
+> ```
+> (`android26` porque `minSdk = 26` en `androidApp/build.gradle.kts` — si ese valor cambia, hay que
+> recompilar con el clang de esa API. `<host>` es `windows-x86_64`/`linux-x86_64`/`darwin-x86_64`
+> según el sistema que compila. El binario resultante queda dinámico contra `libc.so`/`libdl.so`/
+> `liblog.so` — todas presentes en cualquier Android, no hace falta empaquetar nada más.)
 
 Solo se soporta `arm64-v8a` (todo el hardware real del usuario — celulares y handhelds modernos
 tipo Retroid/Ayn — es arm64); no hace falta ni conviene agregar otras arquitecturas.
+
+### Otras dos trampas de Android confirmadas en hardware real
+
+- **El proceso de rclone necesita que la app esté "en primer plano" ante el sistema mientras dura
+  la sincronización.** Algunos dispositivos cortan todo acceso a red a una app en segundo plano sin
+  ningún período de gracia (confirmado con `dumpsys netpolicy`: `allowed=NONE`) — y el flujo de
+  autorización de Google manda la app a segundo plano apenas se abre el navegador, justo cuando
+  rclone necesita canjear el código por el token. `CloudSyncForegroundService`
+  (`androidApp/.../CloudSyncForegroundService.kt`) mantiene una notificación mientras
+  `AppController.busy` está en una fase de nube (`MainActivity.kt` la arranca/para según eso) para
+  quedar exento de ese corte.
+- **Una carpeta activa elegida con el selector de Android es una URI `content://`, no una ruta de
+  archivo real** — rclone no puede escribir ahí directamente. `resolveRealPath`
+  (`shared/.../platform/RealPathResolver.kt`) la traduce a la ruta real por debajo cuando viene del
+  proveedor de almacenamiento estándar (interno o tarjeta SD); si viene de otro proveedor (uno
+  respaldado por la nube, por ejemplo) no hay ruta real posible y se avisa en vez de fallar con un
+  error críptico de rclone.
 
 ## Tests
 

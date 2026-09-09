@@ -11,6 +11,7 @@ import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.ConflictResolutionStrategy
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.platform.openUrlInBrowser
+import com.multiprofileemu.platform.resolveRealPath
 import com.multiprofileemu.util.currentEpochMillis
 import com.multiprofileemu.util.newId
 import kotlinx.coroutines.CoroutineScope
@@ -223,7 +224,7 @@ class AppController(
             return if (group == null) {
                 "No se encontró el grupo."
             } else {
-                val localPath = swapEngine.storagePathFor(groupId, profileId)
+                val localPath = resolveSyncPath(swapEngine.storagePathFor(groupId, profileId)) ?: return UNSYNCABLE_PATH_ERROR
                 val error = performCloudSync(localPath, config, force) { groups, finalConfig ->
                     groups.map { g ->
                         if (g.id != groupId) {
@@ -247,16 +248,23 @@ class AppController(
             return if (group == null) {
                 "No se encontró el grupo."
             } else {
-                val error = performCloudSync(group.activeFolderPath, config, force) { groups, finalConfig ->
+                val localPath = resolveSyncPath(group.activeFolderPath) ?: return UNSYNCABLE_PATH_ERROR
+                val error = performCloudSync(localPath, config, force) { groups, finalConfig ->
                     groups.map { g -> if (g.id == groupId) g.copy(activeCloudSync = finalConfig) else g }
                 }
-                if (error == null) checkForConflicts(groupId, null, group.activeFolderPath, config)
+                if (error == null) checkForConflicts(groupId, null, localPath, config)
                 error
             }
         } finally {
             _busy.value = null
         }
     }
+
+    // On Android, a folder picked via the SAF chooser is a content:// URI, not a real filesystem
+    // path — rclone's local backend can't write to one directly. Desktop paths are always already
+    // real (resolveRealPath is a no-op there). Resolved once, up front, so the same real path is
+    // used consistently for the sync itself and for the conflict scan/resolution that follows it.
+    private fun resolveSyncPath(path: String): String? = resolveRealPath(path)
 
     /**
      * After a successful BISYNC using [ConflictResolutionStrategy.MANUAL], surfaces any conflicts
@@ -299,6 +307,12 @@ class AppController(
         } finally {
             _busy.value = null
         }
+    }
+
+    private companion object {
+        const val UNSYNCABLE_PATH_ERROR = "Esta carpeta no se puede sincronizar directamente porque no tiene una " +
+            "ruta de archivo real accesible (por ejemplo, si viene de un proveedor de almacenamiento en la nube " +
+            "en vez de la memoria del dispositivo)."
     }
 }
 

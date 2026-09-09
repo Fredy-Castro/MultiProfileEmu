@@ -1,10 +1,14 @@
 package com.multiprofileemu.android
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -15,6 +19,7 @@ import com.multiprofileemu.app.AppHomeManager
 import com.multiprofileemu.cloud.createRcloneRunner
 import com.multiprofileemu.data.AppConfigRepository
 import com.multiprofileemu.domain.CloudSyncEngine
+import com.multiprofileemu.domain.OperationPhase
 import com.multiprofileemu.domain.ProfileStorageResolver
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.fs.createFileSystemAdapter
@@ -28,6 +33,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
+private val CLOUD_PHASES = setOf(
+    OperationPhase.CLOUD_AUTHORIZING,
+    OperationPhase.CLOUD_UPLOAD,
+    OperationPhase.CLOUD_DOWNLOAD,
+    OperationPhase.CLOUD_BISYNC,
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -43,11 +57,22 @@ class MainActivity : ComponentActivity() {
     // out of sync. See AppController for the same reasoning applied to profile swaps.
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    // Best-effort: the foreground service still starts fine without this granted (it's what
+    // actually makes the OS exempt the app from its background network cutoff), it just means the
+    // notification itself won't be visible on API 33+. No result handling needed — there's no
+    // fallback behavior that depends on whether the user grants it.
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Must run before this Activity reaches STARTED, per registerForActivityResult's contract.
         AndroidFolderPickerBridge.register(this)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         gamepadController = AndroidGamepadController(applicationContext)
         gamepadController.start()
@@ -59,8 +84,8 @@ class MainActivity : ComponentActivity() {
         // later is opt-in from Settings.
         val anchorDir = defaultAppDataDir()
         val homeManager = AppHomeManager(fs, anchorDir, defaultHomeDir = anchorDir)
-        // AndroidRcloneRunner runs a static rclone Linux binary bundled as a fake .so under
-        // jniLibs/<abi>/librclone.so — see that file for why this works without root.
+        // AndroidRcloneRunner runs rclone cross-compiled for GOOS=android (CGO, bionic-linked) —
+        // see that file for why the plain upstream Linux build doesn't work here (no working DNS).
         val cloudSyncEngine = CloudSyncEngine(createRcloneRunner("$anchorDir/rclone.conf"))
 
         setContent {
@@ -74,6 +99,22 @@ class MainActivity : ComponentActivity() {
                     val configRepository = AppConfigRepository(fs, configFilePath = "$homeDir/config.json")
                     val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$homeDir/profiles"))
                     AppController(configRepository, swapEngine, cloudSyncEngine)
+                }
+
+                // Starts/stops CloudSyncForegroundService around cloud phases only — local
+                // operations (switching profiles, etc.) don't touch the network and don't need to
+                // survive being backgrounded. See that service for why this exists at all.
+                LaunchedEffect(controller) {
+                    controller.busy
+                        .map { it?.phase in CLOUD_PHASES }
+                        .distinctUntilChanged()
+                        .collect { active ->
+                            if (active) {
+                                CloudSyncForegroundService.start(applicationContext)
+                            } else {
+                                CloudSyncForegroundService.stop(applicationContext)
+                            }
+                        }
                 }
 
                 App(

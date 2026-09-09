@@ -18,7 +18,24 @@ import java.net.URLEncoder
  * (ProfileStorageResolver, AppConfigRepository, AppHomeManager) never needs to know this scheme
  * exists — to them it's just another opaque path string they can concatenate onto.
  */
-private const val SAF_CHILD_SCHEME = "safchild://"
+internal const val SAF_CHILD_SCHEME = "safchild://"
+
+/**
+ * Splits a SAF path into its root tree URI and the relative segments appended after it. Top-level
+ * (not a method) because it's pure — no [android.content.Context]/[DocumentFile] involved — and
+ * [com.multiprofileemu.platform.RealPathResolver.android.kt] needs the exact same parsing to
+ * resolve a `safchild://`-encoded path down to a real filesystem path.
+ */
+internal fun splitSafPath(path: String): Pair<String, List<String>> {
+    if (!path.startsWith(SAF_CHILD_SCHEME)) return path to emptyList()
+    val rest = path.removePrefix(SAF_CHILD_SCHEME)
+    val bang = rest.indexOf('!')
+    val encodedRoot = if (bang >= 0) rest.substring(0, bang) else rest
+    val relative = if (bang >= 0) rest.substring(bang + 1) else ""
+    val root = URLDecoder.decode(encodedRoot, "UTF-8")
+    val segments = relative.split("/").filter { it.isNotEmpty() }
+    return root to segments
+}
 
 /** Wraps a freshly-picked SAF tree URI so it can be used as a home dir (i.e. have paths appended to it). */
 fun encodeSafRoot(treeUri: String): String = "$SAF_CHILD_SCHEME${URLEncoder.encode(treeUri, "UTF-8")}!"
@@ -48,18 +65,6 @@ fun prettySafRootLabel(path: String): String? {
 class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter {
 
     private fun isSafPath(path: String) = path.startsWith("content://") || path.startsWith(SAF_CHILD_SCHEME)
-
-    /** Splits a SAF path into its root tree URI and the relative segments appended after it. */
-    private fun splitSafPath(path: String): Pair<String, List<String>> {
-        if (!path.startsWith(SAF_CHILD_SCHEME)) return path to emptyList()
-        val rest = path.removePrefix(SAF_CHILD_SCHEME)
-        val bang = rest.indexOf('!')
-        val encodedRoot = if (bang >= 0) rest.substring(0, bang) else rest
-        val relative = if (bang >= 0) rest.substring(bang + 1) else ""
-        val root = URLDecoder.decode(encodedRoot, "UTF-8")
-        val segments = relative.split("/").filter { it.isNotEmpty() }
-        return root to segments
-    }
 
     /** Walks from the tree root through every segment, optionally creating missing directories along the way. */
     private fun resolveSafDoc(path: String, createMissingDirs: Boolean): DocumentFile? {

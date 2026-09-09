@@ -67,6 +67,13 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // applicationIdSuffix keeps this fully separate from a release install on the same
+        // device (different package, coexists side by side) — debuggable=true (AGP's default
+        // for this build type) is what unlocks `adb shell run-as` for inspecting this specific
+        // process's environment/sandbox, which a release build never allows.
+        debug {
+            applicationIdSuffix = ".debug"
+        }
     }
 }
 
