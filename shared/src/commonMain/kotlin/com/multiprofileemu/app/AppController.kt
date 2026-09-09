@@ -6,13 +6,15 @@ import com.multiprofileemu.domain.OperationPhase
 import com.multiprofileemu.domain.OperationProgress
 import com.multiprofileemu.domain.ProfileSwapEngine
 import com.multiprofileemu.domain.SyncConflict
+import com.multiprofileemu.fs.FileSystemAdapter
 import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.ConflictResolutionStrategy
 import com.multiprofileemu.model.SaveGroup
+import com.multiprofileemu.platform.isSafPath
 import com.multiprofileemu.platform.openUrlInBrowser
-import com.multiprofileemu.platform.resolveRealPath
 import com.multiprofileemu.util.currentEpochMillis
+import com.multiprofileemu.util.defaultAppDataDir
 import com.multiprofileemu.util.newId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +47,7 @@ class AppController(
     private val configRepository: AppConfigRepository,
     private val swapEngine: ProfileSwapEngine,
     private val cloudSyncEngine: CloudSyncEngine,
+    private val fs: FileSystemAdapter,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
@@ -218,14 +221,21 @@ class AppController(
         profileId: String,
         config: CloudSyncConfig,
         force: Boolean = false,
+        skipMirrorIn: Boolean = false,
     ): String? {
         try {
             val group = _groups.value.firstOrNull { it.id == groupId }
             return if (group == null) {
                 "No se encontró el grupo."
             } else {
-                val localPath = resolveSyncPath(swapEngine.storagePathFor(groupId, profileId)) ?: return UNSYNCABLE_PATH_ERROR
-                val error = performCloudSync(localPath, config, force) { groups, finalConfig ->
+                val originalPath = swapEngine.storagePathFor(groupId, profileId)
+                val staged = isSafPath(originalPath)
+                val syncPath = if (staged) stagingPath("$groupId-profile-$profileId") else originalPath
+                if (staged) {
+                    fs.ensureDirectory(syncPath)
+                    if (!skipMirrorIn && !mirrorDirectory(originalPath, syncPath)) return STAGING_ERROR
+                }
+                val error = performCloudSync(syncPath, config, force) { groups, finalConfig ->
                     groups.map { g ->
                         if (g.id != groupId) {
                             g
@@ -234,7 +244,12 @@ class AppController(
                         }
                     }
                 }
-                if (error == null) checkForConflicts(groupId, profileId, localPath, config)
+                if (error == null) {
+                    checkForConflicts(groupId, profileId, syncPath, config)
+                    if (staged && _pendingConflicts.value == null && !mirrorDirectory(syncPath, originalPath)) {
+                        return STAGING_ERROR
+                    }
+                }
                 error
             }
         } finally {
@@ -242,17 +257,33 @@ class AppController(
         }
     }
 
-    private suspend fun runActiveCloudSyncLocked(groupId: String, config: CloudSyncConfig, force: Boolean = false): String? {
+    private suspend fun runActiveCloudSyncLocked(
+        groupId: String,
+        config: CloudSyncConfig,
+        force: Boolean = false,
+        skipMirrorIn: Boolean = false,
+    ): String? {
         try {
             val group = _groups.value.firstOrNull { it.id == groupId }
             return if (group == null) {
                 "No se encontró el grupo."
             } else {
-                val localPath = resolveSyncPath(group.activeFolderPath) ?: return UNSYNCABLE_PATH_ERROR
-                val error = performCloudSync(localPath, config, force) { groups, finalConfig ->
+                val originalPath = group.activeFolderPath
+                val staged = isSafPath(originalPath)
+                val syncPath = if (staged) stagingPath("$groupId-active") else originalPath
+                if (staged) {
+                    fs.ensureDirectory(syncPath)
+                    if (!skipMirrorIn && !mirrorDirectory(originalPath, syncPath)) return STAGING_ERROR
+                }
+                val error = performCloudSync(syncPath, config, force) { groups, finalConfig ->
                     groups.map { g -> if (g.id == groupId) g.copy(activeCloudSync = finalConfig) else g }
                 }
-                if (error == null) checkForConflicts(groupId, null, localPath, config)
+                if (error == null) {
+                    checkForConflicts(groupId, null, syncPath, config)
+                    if (staged && _pendingConflicts.value == null && !mirrorDirectory(syncPath, originalPath)) {
+                        return STAGING_ERROR
+                    }
+                }
                 error
             }
         } finally {
@@ -260,11 +291,30 @@ class AppController(
         }
     }
 
-    // On Android, a folder picked via the SAF chooser is a content:// URI, not a real filesystem
-    // path — rclone's local backend can't write to one directly. Desktop paths are always already
-    // real (resolveRealPath is a no-op there). Resolved once, up front, so the same real path is
-    // used consistently for the sync itself and for the conflict scan/resolution that follows it.
-    private fun resolveSyncPath(path: String): String? = resolveRealPath(path)
+    private fun stagingPath(key: String): String = "${defaultAppDataDir()}/.cloudstage/$key"
+
+    /**
+     * Mirrors [source]'s contents into [dest] (clearing [dest] first, so it ends up an exact
+     * copy) — used on Android to keep a real, app-owned staging directory in sync with a SAF
+     * folder before/after rclone touches the staging side (see [isSafPath]'s doc comment for why
+     * rclone can never touch the SAF folder directly). Wrapped in [Dispatchers.IO] since
+     * [FileSystemAdapter.copyDirectoryContents] is a plain blocking call — same pattern
+     * [updateGroup] already uses for the equivalent profile-swap copies.
+     *
+     * [FileSystemAdapter.copyDirectoryContents] doesn't report per-file failures, so this can only
+     * catch the most dangerous failure shape — a copy that silently produced nothing at all (e.g.
+     * a revoked SAF grant) — by comparing total sizes before and after; a partial failure (some
+     * files copied, others silently skipped) isn't caught.
+     */
+    private suspend fun mirrorDirectory(source: String, dest: String): Boolean = withContext(Dispatchers.IO) {
+        val sourceSize = fs.sizeOfDirectory(source)
+        fs.clearDirectoryContents(dest)
+        fs.ensureDirectory(dest)
+        fs.copyDirectoryContents(source, dest) { done, total ->
+            _busy.value = OperationProgress(OperationPhase.SYNCING, done.toLong(), total.toLong())
+        }
+        sourceSize == 0L || fs.sizeOfDirectory(dest) > 0L
+    }
 
     /**
      * After a successful BISYNC using [ConflictResolutionStrategy.MANUAL], surfaces any conflicts
@@ -299,10 +349,14 @@ class AppController(
             // copies on the other side) are exactly what the user just chose above — not an
             // unreviewed mass deletion, so bisync's own delete-count safety abort would otherwise
             // trip on nothing more than a small save folder having few total files.
+            // skipMirrorIn=true: the staging copy already has the user's resolution applied (via
+            // CloudSyncEngine.resolveConflict, which operated on pending.localPath — the staging
+            // path). Mirroring the SAF folder's stale, unresolved content back in would overwrite
+            // that resolution right before this sync runs.
             if (pending.profileId != null) {
-                runCloudSyncLocked(pending.groupId, pending.profileId, pending.config, force = true)
+                runCloudSyncLocked(pending.groupId, pending.profileId, pending.config, force = true, skipMirrorIn = true)
             } else {
-                runActiveCloudSyncLocked(pending.groupId, pending.config, force = true)
+                runActiveCloudSyncLocked(pending.groupId, pending.config, force = true, skipMirrorIn = true)
             }
         } finally {
             _busy.value = null
@@ -310,9 +364,9 @@ class AppController(
     }
 
     private companion object {
-        const val UNSYNCABLE_PATH_ERROR = "Esta carpeta no se puede sincronizar directamente porque no tiene una " +
-            "ruta de archivo real accesible (por ejemplo, si viene de un proveedor de almacenamiento en la nube " +
-            "en vez de la memoria del dispositivo)."
+        const val STAGING_ERROR = "No se pudo preparar la sincronización: no se pudo copiar el contenido entre " +
+            "la carpeta activa y el área temporal de la app. Revisá que el permiso sobre esa carpeta siga " +
+            "vigente (podés tener que elegirla de nuevo desde Configuración)."
     }
 }
 

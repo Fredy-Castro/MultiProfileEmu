@@ -3,7 +3,6 @@ package com.multiprofileemu.domain
 import com.multiprofileemu.cloud.RcloneRunner
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.ConflictResolutionStrategy
-import com.multiprofileemu.platform.storageRenameUnreliable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -113,15 +112,9 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
                 }
                 CloudSyncMode.DOWNLOAD -> {
                     add("sync"); add(remote); add(localPath)
-                    // See storageRenameUnreliable: without this, rclone's normal
-                    // download-to-.partial-then-rename finish step fails outright on some Android
-                    // storage. Only added when local is actually the write destination (download,
-                    // not upload) — irrelevant, so skipped, when local is the source.
-                    if (storageRenameUnreliable) add("--inplace")
                 }
                 CloudSyncMode.BISYNC -> {
                     add("bisync"); add(localPath); add(remote)
-                    if (storageRenameUnreliable) add("--inplace")
                     when (conflictResolution) {
                         ConflictResolutionStrategy.MANUAL -> {
                             // "none" means bisync doesn't pick a winner on its own: both
@@ -204,10 +197,11 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
      * here; the caller is expected to run [sync] again afterwards so the resolution (and the
      * deletion of the leftover conflict copies) propagates the same way any other change would.
      *
-     * Copies the winner rather than using `moveto` (rename) deliberately: same issue as
-     * [storageRenameUnreliable] on [sync]'s downloads — a same-backend local `moveto` renames
-     * under the hood, which fails outright on Android's scoped-storage-resolved paths. Copy+delete
-     * never renames, so it works everywhere; the extra I/O is irrelevant at save-file sizes.
+     * Copies the winner rather than using `moveto` (rename) deliberately: [localPath] here is
+     * always a plain real filesystem path (see [com.multiprofileemu.app.AppController]'s staging
+     * directory for SAF-backed folders), but copy+delete is just as cheap as a rename at
+     * save-file sizes and one less thing to reason about than "does a same-backend move on this
+     * particular backend actually rename or copy+delete under the hood".
      */
     suspend fun resolveConflict(localPath: String, conflict: SyncConflict, keepLocal: Boolean): String? {
         val winnerConflictPath = if (keepLocal) conflict.localConflictPath else conflict.cloudConflictPath
@@ -216,11 +210,7 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         val canonicalPath = "$localPath/${conflict.relativePath}"
         val loserPath = "$localPath/$loserConflictPath"
 
-        val copyArgs = buildList {
-            add("copyto"); add(winnerPath); add(canonicalPath)
-            if (storageRenameUnreliable) add("--inplace")
-        }
-        val copyExit = runner.run(copyArgs) {}
+        val copyExit = runner.run(listOf("copyto", winnerPath, canonicalPath)) {}
         if (copyExit != 0) {
             return "No se pudo aplicar la resolución para ${conflict.relativePath}."
         }

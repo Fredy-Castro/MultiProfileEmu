@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                     fs.ensureDirectory(homeDir)
                     val configRepository = AppConfigRepository(fs, configFilePath = "$homeDir/config.json")
                     val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$homeDir/profiles"))
-                    AppController(configRepository, swapEngine, cloudSyncEngine)
+                    AppController(configRepository, swapEngine, cloudSyncEngine, fs)
                 }
 
                 // Starts/stops CloudSyncForegroundService around cloud phases only — local

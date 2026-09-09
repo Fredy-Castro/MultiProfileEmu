@@ -75,7 +75,7 @@ private fun runGui() = application {
                     fs.ensureDirectory(resolvedHomeDir)
                     val configRepository = AppConfigRepository(fs, configFilePath = "$resolvedHomeDir/config.json")
                     val swapEngine = ProfileSwapEngine(fs, ProfileStorageResolver(profilesRootDir = "$resolvedHomeDir/profiles"))
-                    AppController(configRepository, swapEngine, cloudSyncEngine)
+                    AppController(configRepository, swapEngine, cloudSyncEngine, fs)
                 }
 
                 App(
