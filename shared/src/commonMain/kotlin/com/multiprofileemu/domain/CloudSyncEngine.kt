@@ -3,6 +3,7 @@ package com.multiprofileemu.domain
 import com.multiprofileemu.cloud.RcloneRunner
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.ConflictResolutionStrategy
+import com.multiprofileemu.platform.storageRenameUnreliable
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -112,9 +113,15 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
                 }
                 CloudSyncMode.DOWNLOAD -> {
                     add("sync"); add(remote); add(localPath)
+                    // See storageRenameUnreliable: without this, rclone's normal
+                    // download-to-.partial-then-rename finish step fails outright on some Android
+                    // storage. Only added when local is actually the write destination (download,
+                    // not upload) — irrelevant, so skipped, when local is the source.
+                    if (storageRenameUnreliable) add("--inplace")
                 }
                 CloudSyncMode.BISYNC -> {
                     add("bisync"); add(localPath); add(remote)
+                    if (storageRenameUnreliable) add("--inplace")
                     when (conflictResolution) {
                         ConflictResolutionStrategy.MANUAL -> {
                             // "none" means bisync doesn't pick a winner on its own: both
