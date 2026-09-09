@@ -199,10 +199,15 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
     }
 
     /**
-     * Renames the winning side's copy back to [SyncConflict.relativePath] and deletes the losing
-     * one — both plain local operations against [localPath]. Nothing is pushed to the remote here;
-     * the caller is expected to run [sync] again afterwards so the resolution (and the deletion of
-     * the leftover conflict copies) propagates the same way any other change would.
+     * Puts the winning side's copy back at [SyncConflict.relativePath] and deletes both suffixed
+     * copies — all plain local operations against [localPath]. Nothing is pushed to the remote
+     * here; the caller is expected to run [sync] again afterwards so the resolution (and the
+     * deletion of the leftover conflict copies) propagates the same way any other change would.
+     *
+     * Copies the winner rather than using `moveto` (rename) deliberately: same issue as
+     * [storageRenameUnreliable] on [sync]'s downloads — a same-backend local `moveto` renames
+     * under the hood, which fails outright on Android's scoped-storage-resolved paths. Copy+delete
+     * never renames, so it works everywhere; the extra I/O is irrelevant at save-file sizes.
      */
     suspend fun resolveConflict(localPath: String, conflict: SyncConflict, keepLocal: Boolean): String? {
         val winnerConflictPath = if (keepLocal) conflict.localConflictPath else conflict.cloudConflictPath
@@ -211,10 +216,15 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         val canonicalPath = "$localPath/${conflict.relativePath}"
         val loserPath = "$localPath/$loserConflictPath"
 
-        val moveExit = runner.run(listOf("moveto", winnerPath, canonicalPath)) {}
-        if (moveExit != 0) {
+        val copyArgs = buildList {
+            add("copyto"); add(winnerPath); add(canonicalPath)
+            if (storageRenameUnreliable) add("--inplace")
+        }
+        val copyExit = runner.run(copyArgs) {}
+        if (copyExit != 0) {
             return "No se pudo aplicar la resolución para ${conflict.relativePath}."
         }
+        runner.run(listOf("deletefile", winnerPath)) {}
         runner.run(listOf("deletefile", loserPath)) {}
         return null
     }
