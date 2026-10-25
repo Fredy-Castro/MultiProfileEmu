@@ -45,6 +45,8 @@ import com.multiprofileemu.app.AppController
 import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.platform.displayHomeDir
+import com.multiprofileemu.platform.hasAllFilesAccess
+import com.multiprofileemu.platform.openAllFilesAccessSettings
 import com.multiprofileemu.platform.pickFolderDialog
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -247,6 +249,20 @@ private fun SettingsDialog(
                 if (supportsCloudSync) {
                     Spacer(Modifier.height(16.dp))
                     CloudRemotesSection(controller = controller)
+                }
+                if (!hasAllFilesAccess()) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Para usar una carpeta dentro de Android/data de otra app (por ejemplo, " +
+                            "saves de un emulador) hace falta el permiso especial \"Acceso a " +
+                            "todos los archivos\" — el selector de carpetas no puede navegar " +
+                            "hasta ahí, pero una ruta escrita a mano en config.json sí funciona " +
+                            "una vez concedido.",
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { openAllFilesAccessSettings() }) {
+                        Text("Conceder acceso a todos los archivos")
+                    }
                 }
             }
         },

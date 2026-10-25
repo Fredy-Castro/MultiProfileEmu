@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Lets the user point a profile/sync folder at a raw path Storage Access Framework's own
+         picker refuses to even navigate into (e.g. another app's Android/data, where emulator
+         saves live) — confirmed on real hardware that plain java.io.File access to such a path
+         works once this is granted, SAF or not. Requested on demand via Settings (see
+         AllFilesAccess.android.kt), never at install time — it's a sensitive "special app access"
+         permission, not a runtime-prompt one. tools:ignore=ScopedStorage: Play Store restricts
+         this to apps that qualify as file managers, but this app is sideloaded, not distributed
+         there. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <!-- Needed by the bundled rclone binary: cloud sync itself obviously needs network access,
          and even the local OAuth handshake (a loopback listen socket on 127.0.0.1:53682) is
