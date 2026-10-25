@@ -140,8 +140,14 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
         }
 
         var lastErrorLine: String? = null
+        // Fallback for fatal errors rclone prints as plain text instead of a --use-json-log
+        // line (e.g. a flag/config error raised before its logger is even set up) — without this,
+        // decodeFromString below throws, parsed stays null, and the real message was silently
+        // dropped in favor of the generic "código $exitCode" line.
+        var lastRawLine: String? = null
         onProgress(OperationProgress(phase, 0L, 0L))
         val exitCode = runner.run(args) { line ->
+            lastRawLine = line
             val parsed = try {
                 json.decodeFromString<RcloneLogLine>(line)
             } catch (e: Exception) {
@@ -156,7 +162,8 @@ class CloudSyncEngine(private val runner: RcloneRunner) {
                 lastErrorLine = parsed.msg ?: line
             }
         }
-        return if (exitCode == 0) null else lastErrorLine ?: "rclone terminó con un error (código $exitCode)."
+        return if (exitCode == 0) null else lastErrorLine ?: lastRawLine
+            ?: "rclone terminó con un error (código $exitCode)."
     }
 
     /**
