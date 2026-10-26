@@ -11,7 +11,7 @@ import com.multiprofileemu.model.CloudSyncConfig
 import com.multiprofileemu.model.CloudSyncMode
 import com.multiprofileemu.model.ConflictResolutionStrategy
 import com.multiprofileemu.model.SaveGroup
-import com.multiprofileemu.platform.isSafPath
+import com.multiprofileemu.platform.needsCloudSyncStaging
 import com.multiprofileemu.platform.openUrlInBrowser
 import com.multiprofileemu.util.currentEpochMillis
 import com.multiprofileemu.util.defaultAppDataDir
@@ -229,11 +229,11 @@ class AppController(
                 "No se encontró el grupo."
             } else {
                 val originalPath = swapEngine.storagePathFor(groupId, profileId)
-                val staged = isSafPath(originalPath)
+                val staged = needsCloudSyncStaging(originalPath)
                 val syncPath = if (staged) stagingPath("$groupId-profile-$profileId") else originalPath
                 if (staged) {
                     fs.ensureDirectory(syncPath)
-                    if (!skipMirrorIn && !mirrorDirectory(originalPath, syncPath)) return STAGING_ERROR
+                    if (!skipMirrorIn) mirrorDirectory(originalPath, syncPath)?.let { return "$STAGING_ERROR $it" }
                 }
                 val error = performCloudSync(syncPath, config, force) { groups, finalConfig ->
                     groups.map { g ->
@@ -246,8 +246,8 @@ class AppController(
                 }
                 if (error == null) {
                     checkForConflicts(groupId, profileId, syncPath, config)
-                    if (staged && _pendingConflicts.value == null && !mirrorDirectory(syncPath, originalPath)) {
-                        return STAGING_ERROR
+                    if (staged && _pendingConflicts.value == null) {
+                        mirrorDirectory(syncPath, originalPath)?.let { return "$STAGING_ERROR $it" }
                     }
                 }
                 error
@@ -269,19 +269,19 @@ class AppController(
                 "No se encontró el grupo."
             } else {
                 val originalPath = group.activeFolderPath
-                val staged = isSafPath(originalPath)
+                val staged = needsCloudSyncStaging(originalPath)
                 val syncPath = if (staged) stagingPath("$groupId-active") else originalPath
                 if (staged) {
                     fs.ensureDirectory(syncPath)
-                    if (!skipMirrorIn && !mirrorDirectory(originalPath, syncPath)) return STAGING_ERROR
+                    if (!skipMirrorIn) mirrorDirectory(originalPath, syncPath)?.let { return "$STAGING_ERROR $it" }
                 }
                 val error = performCloudSync(syncPath, config, force) { groups, finalConfig ->
                     groups.map { g -> if (g.id == groupId) g.copy(activeCloudSync = finalConfig) else g }
                 }
                 if (error == null) {
                     checkForConflicts(groupId, null, syncPath, config)
-                    if (staged && _pendingConflicts.value == null && !mirrorDirectory(syncPath, originalPath)) {
-                        return STAGING_ERROR
+                    if (staged && _pendingConflicts.value == null) {
+                        mirrorDirectory(syncPath, originalPath)?.let { return "$STAGING_ERROR $it" }
                     }
                 }
                 error
@@ -296,24 +296,39 @@ class AppController(
     /**
      * Mirrors [source]'s contents into [dest] (clearing [dest] first, so it ends up an exact
      * copy) — used on Android to keep a real, app-owned staging directory in sync with a SAF
-     * folder before/after rclone touches the staging side (see [isSafPath]'s doc comment for why
+     * folder before/after rclone touches the staging side (see [needsCloudSyncStaging]'s doc comment for why
      * rclone can never touch the SAF folder directly). Wrapped in [Dispatchers.IO] since
      * [FileSystemAdapter.copyDirectoryContents] is a plain blocking call — same pattern
      * [updateGroup] already uses for the equivalent profile-swap copies.
      *
-     * [FileSystemAdapter.copyDirectoryContents] doesn't report per-file failures, so this can only
-     * catch the most dangerous failure shape — a copy that silently produced nothing at all (e.g.
-     * a revoked SAF grant) — by comparing total sizes before and after; a partial failure (some
-     * files copied, others silently skipped) isn't caught.
+     * Returns null on success, or a detail string on failure — [FileSystemAdapter.copyDirectoryContents]
+     * doesn't report per-file failures, so this can only catch the most dangerous failure shape — a
+     * copy that silently produced nothing at all (e.g. a revoked SAF grant) — by comparing total
+     * sizes before and after; a partial failure (some files copied, others silently skipped) isn't
+     * caught. The detail string exists so that shape of failure, when it does happen, says *why*
+     * instead of just "it didn't work" — see [STAGING_ERROR]'s callers.
      */
-    private suspend fun mirrorDirectory(source: String, dest: String): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun mirrorDirectory(source: String, dest: String): String? = withContext(Dispatchers.IO) {
         val sourceSize = fs.sizeOfDirectory(source)
         fs.clearDirectoryContents(dest)
         fs.ensureDirectory(dest)
-        fs.copyDirectoryContents(source, dest) { done, total ->
-            _busy.value = OperationProgress(OperationPhase.SYNCING, done.toLong(), total.toLong())
+        val verifiedByAdapter = try {
+            fs.copyDirectoryContents(source, dest) { done, total ->
+                _busy.value = OperationProgress(OperationPhase.SYNCING, done.toLong(), total.toLong())
+            }
+        } catch (e: Exception) {
+            return@withContext (e.message ?: e.toString())
         }
-        sourceSize == 0L || fs.sizeOfDirectory(dest) > 0L
+        // A true here is authoritative even if the check below says otherwise — see
+        // FileSystemAdapter.copyDirectoryContents's doc for why that check isn't reliable for
+        // every destination. A false (or an adapter that hasn't been updated to verify its own
+        // copy) still falls through to it as a fallback.
+        val destSize = fs.sizeOfDirectory(dest)
+        when {
+            verifiedByAdapter || sourceSize == 0L || destSize > 0L -> null
+            else -> "origen $source: existe=${fs.exists(source)}, $sourceSize bytes; " +
+                "destino $dest: existe=${fs.exists(dest)}, $destSize bytes tras copiar"
+        }
     }
 
     /**
@@ -366,7 +381,7 @@ class AppController(
     private companion object {
         const val STAGING_ERROR = "No se pudo preparar la sincronización: no se pudo copiar el contenido entre " +
             "la carpeta activa y el área temporal de la app. Revisá que el permiso sobre esa carpeta siga " +
-            "vigente (podés tener que elegirla de nuevo desde Configuración)."
+            "vigente (podés tener que elegirla de nuevo desde Configuración). Detalle:"
     }
 }
 

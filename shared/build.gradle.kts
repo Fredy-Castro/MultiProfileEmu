@@ -47,6 +47,8 @@ kotlin {
             dependencies {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.documentfile)
+                implementation(libs.shizuku.api)
+                implementation(libs.shizuku.provider)
             }
         }
     }
@@ -58,6 +60,12 @@ android {
 
     defaultConfig {
         minSdk = 26
+    }
+
+    // IPrivilegedFileOps.aidl: the interface ShizukuBridge binds to, implemented by
+    // PrivilegedFileOpsService and run in a process Shizuku spawns under adb shell's UID.
+    buildFeatures {
+        aidl = true
     }
 
     compileOptions {

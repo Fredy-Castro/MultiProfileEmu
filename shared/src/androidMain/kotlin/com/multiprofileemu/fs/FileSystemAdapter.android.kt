@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.multiprofileemu.MultiProfileEmuApplication
+import com.multiprofileemu.platform.ShizukuBridge
+import com.multiprofileemu.platform.isForeignAppStoragePath
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -116,21 +118,32 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         }
     }
 
-    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit) {
-        ensureDirectory(destPath)
+    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean {
         val sourceIsSaf = isSafPath(sourcePath)
         val destIsSaf = isSafPath(destPath)
+        // Plain java.io.File can create a new file inside our own sandbox or an existing SAF
+        // grant, but not inside *another* app's Android/data — confirmed on real hardware (the
+        // destination directory already exists, but FileOutputStream's open() still fails with
+        // ENOENT). ShizukuBridge runs the copy as adb shell's UID instead, which can.
+        if (!sourceIsSaf && !destIsSaf && isForeignAppStoragePath(destPath) && ShizukuBridge.hasPermission()) {
+            return copyViaShizuku(sourcePath, destPath, onProgress)
+        }
+        ensureDirectory(destPath)
+        // false, not true, for every branch below: none of them verify their own result the way
+        // ShizukuBridge's does, so the caller's own post-copy size check (see
+        // FileSystemAdapter.copyDirectoryContents's doc) is what actually catches a failure here,
+        // exactly as before this method started returning anything.
         when {
             sourceIsSaf && destIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return onProgress(0, 0)
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return onProgress(0, 0)
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return false }
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return false }
                 val total = countFilesInDoc(source)
                 var done = 0
                 onProgress(0, total)
                 copyDocToDoc(source, dest) { done++; onProgress(done, total) }
             }
             sourceIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: return onProgress(0, 0)
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return false }
                 val total = countFilesInDoc(source)
                 var done = 0
                 onProgress(0, total)
@@ -138,8 +151,8 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
             }
             destIsSaf -> {
                 val source = File(sourcePath)
-                if (!source.exists()) return onProgress(0, 0)
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: return onProgress(0, 0)
+                if (!source.exists()) { onProgress(0, 0); return false }
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return false }
                 val total = source.listFiles()?.sumOf { countFilesInFile(it) } ?: 0
                 var done = 0
                 onProgress(0, total)
@@ -147,13 +160,34 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
             }
             else -> {
                 val source = File(sourcePath)
-                if (!source.exists()) return onProgress(0, 0)
+                if (!source.exists()) { onProgress(0, 0); return false }
                 val total = countFilesInFile(source)
                 var done = 0
                 onProgress(0, total)
                 copyFileToFile(source, File(destPath)) { done++; onProgress(done, total) }
             }
         }
+        return false
+    }
+
+    /**
+     * Delegates to [PrivilegedFileOpsService] (via [ShizukuBridge]) instead of walking the tree
+     * ourselves — that service runs as a different UID in a different process, so it has to do
+     * its own copying rather than being handed a callback into this one. Reports progress as a
+     * single 0→total jump rather than per-file: the AIDL call gives no hook to report from
+     * mid-copy, and this path only ever runs for small save-data folders anyway.
+     *
+     * The returned boolean comes from [PrivilegedFileOpsService]'s own post-copy size check, not
+     * this method's — confirmed on real hardware that *this* process's view of a path another
+     * (privileged) process just wrote to can still report stale/nonexistent, so only a check made
+     * from inside that same privileged process can be trusted here.
+     */
+    private fun copyViaShizuku(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean {
+        val total = countFilesInFile(File(sourcePath))
+        onProgress(0, total)
+        val succeeded = ShizukuBridge.copyDirectory(sourcePath, destPath)
+        onProgress(total, total)
+        return succeeded
     }
 
     private fun countFilesInFile(file: File): Int =

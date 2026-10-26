@@ -15,3 +15,15 @@ package com.multiprofileemu.platform
  * real path directly — see its `mirrorDirectory`.
  */
 expect fun isSafPath(path: String): Boolean
+
+/**
+ * True when [path] needs the same staging treatment as [isSafPath], for a different reason: a raw
+ * filesystem path into *another* app's `Android/data`/`Android/obb` folder. This app's own
+ * Kotlin/Java file I/O can read/write there once "All files access" (`MANAGE_EXTERNAL_STORAGE`) is
+ * granted, but rclone — a separate native process making its own raw `mkdir()`/`open()` syscalls —
+ * cannot: confirmed on real hardware that it gets `ENOENT` just trying to create the destination
+ * directory there, even though the exact same path already exists and is readable through the
+ * app's own file APIs. Always false on desktop, where no such distinction exists. Includes
+ * [isSafPath] itself so [AppController] only has to check one function.
+ */
+expect fun needsCloudSyncStaging(path: String): Boolean

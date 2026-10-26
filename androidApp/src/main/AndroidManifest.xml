@@ -56,6 +56,19 @@
             android:name=".CloudSyncForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Lets this app talk to a running Shizuku (started separately by the user via Wireless
+             debugging or USB pairing) to run shell-privileged commands — specifically, writing a
+             synced file back into another app's Android/data folder, which this app's own
+             process cannot do even with MANAGE_EXTERNAL_STORAGE (see ShizukuBridge.android.kt).
+             Required by shizuku-api regardless of Shizuku's own version. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 
 </manifest>

@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,8 +47,11 @@ import com.multiprofileemu.input.GamepadAction
 import com.multiprofileemu.model.SaveGroup
 import com.multiprofileemu.platform.displayHomeDir
 import com.multiprofileemu.platform.hasAllFilesAccess
+import com.multiprofileemu.platform.hasShizukuPermission
+import com.multiprofileemu.platform.isShizukuAvailable
 import com.multiprofileemu.platform.openAllFilesAccessSettings
 import com.multiprofileemu.platform.pickFolderDialog
+import com.multiprofileemu.platform.requestShizukuPermission
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
@@ -226,6 +230,7 @@ private fun SettingsDialog(
 ) {
     val scope = rememberCoroutineScope()
     var migrationError by remember { mutableStateOf<String?>(null) }
+    var shizukuRefresh by remember { mutableStateOf(0) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Configuración") },
@@ -262,6 +267,21 @@ private fun SettingsDialog(
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { openAllFilesAccessSettings() }) {
                         Text("Conceder acceso a todos los archivos")
+                    }
+                }
+                key(shizukuRefresh) {
+                    if (isShizukuAvailable() && !hasShizukuPermission()) {
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "Shizuku está corriendo pero todavía no le diste permiso. Hace falta " +
+                                "para que la sincronización pueda escribir de vuelta en una " +
+                                "carpeta de otra app (por ejemplo, el memcard de un emulador " +
+                                "dentro de Android/data).",
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { requestShizukuPermission { shizukuRefresh++ } }) {
+                            Text("Conceder permiso a Shizuku")
+                        }
                     }
                 }
             }
