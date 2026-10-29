@@ -53,6 +53,30 @@ fun prettySafRootLabel(path: String): String? {
 }
 
 /**
+ * Resolves a SAF path (bare `content://` tree URI, or [SAF_CHILD_SCHEME]-encoded) down to the real
+ * filesystem path it points at — possible because every `content://` URI this app ever stores
+ * comes from Android's own built-in "ExternalStorageProvider" (`com.android.externalstorage.documents`),
+ * whose tree document IDs are always `<volumeId>:<relativePath>` against *local* storage, never a
+ * cloud/network provider. Returns the input unchanged if it's already a plain path, or null if it's
+ * SAF but not shaped the way expected (shouldn't happen for anything this app itself produced).
+ *
+ * Needed so [ShizukuBridge]'s privileged process — a separate process with no SAF grant of its own,
+ * only `adb shell`'s raw filesystem access — can read the same file by a path it can actually use.
+ */
+internal fun resolveSafPathToReal(path: String): String? {
+    if (!path.startsWith("content://") && !path.startsWith(SAF_CHILD_SCHEME)) return path
+    val (rootUri, segments) = splitSafPath(path)
+    val docId = Uri.parse(rootUri).lastPathSegment?.let { Uri.decode(it) } ?: return null
+    val colon = docId.indexOf(':')
+    if (colon < 0) return null
+    val volumeId = docId.substring(0, colon)
+    val relativePath = docId.substring(colon + 1)
+    val base = if (volumeId == "primary") "/storage/emulated/0" else "/storage/$volumeId"
+    val allSegments = (if (relativePath.isEmpty()) emptyList() else listOf(relativePath)) + segments
+    return (listOf(base) + allSegments).joinToString("/")
+}
+
+/**
  * Handles three kinds of paths: plain filesystem paths (used for the app's own config + profile
  * snapshots when the data home is app-private storage), bare SAF tree URIs (`content://...`,
  * always `activeFolderPath` — an emulator's save folder under scoped storage, never has segments
@@ -124,9 +148,16 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         // Plain java.io.File can create a new file inside our own sandbox or an existing SAF
         // grant, but not inside *another* app's Android/data — confirmed on real hardware (the
         // destination directory already exists, but FileOutputStream's open() still fails with
-        // ENOENT). ShizukuBridge runs the copy as adb shell's UID instead, which can.
-        if (!sourceIsSaf && !destIsSaf && isForeignAppStoragePath(destPath) && ShizukuBridge.hasPermission()) {
-            return copyViaShizuku(sourcePath, destPath, onProgress)
+        // ENOENT, whether written to directly or via DocumentFile→File copyDocToFile below).
+        // ShizukuBridge runs the copy as adb shell's UID instead, which can — but its privileged
+        // process has no SAF grant of its own, so a SAF source has to be resolved to its real path
+        // first (profile snapshots end up SAF-encoded whenever the data home itself lives on a SAF
+        // folder, e.g. an SD card — this isn't only a cloud-sync-staging thing).
+        if (!destIsSaf && isForeignAppStoragePath(destPath) && ShizukuBridge.hasPermission()) {
+            val realSourcePath = if (sourceIsSaf) resolveSafPathToReal(sourcePath) else sourcePath
+            if (realSourcePath != null) {
+                return copyViaShizuku(realSourcePath, destPath, onProgress)
+            }
         }
         ensureDirectory(destPath)
         // false, not true, for every branch below: none of them verify their own result the way
