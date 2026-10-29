@@ -20,7 +20,7 @@ class DesktopFileSystemAdapter : FileSystemAdapter {
         dir.listFiles()?.forEach { it.deleteRecursively() }
     }
 
-    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean {
+    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean? {
         val sourceRoot = Path.of(sourcePath)
         if (!Files.exists(sourceRoot)) {
             onProgress(0, 0)

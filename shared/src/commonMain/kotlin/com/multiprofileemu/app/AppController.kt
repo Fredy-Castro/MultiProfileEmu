@@ -90,12 +90,21 @@ class AppController(
         withContext(Dispatchers.IO) { configRepository.saveGroups(newGroups) }
     }
 
-    private suspend fun updateGroup(groupId: String, transform: (SaveGroup) -> SaveGroup) = runMutation {
+    /**
+     * Returns an error message, or null on success — [transform] (e.g. [ProfileSwapEngine.switchProfile])
+     * can throw to report a failure partway through a copy, in which case [persist] is never
+     * reached and the group's state (e.g. which profile is "active") is left exactly as it was
+     * rather than recording a swap that didn't actually happen on disk.
+     */
+    private suspend fun updateGroup(groupId: String, transform: (SaveGroup) -> SaveGroup): String? = runExclusive {
         try {
             val updated = withContext(Dispatchers.IO) {
                 _groups.value.map { if (it.id == groupId) transform(it) else it }
             }
             persist(updated)
+            null
+        } catch (e: Exception) {
+            e.message ?: "No se pudo completar la operación."
         } finally {
             _busy.value = null
         }
@@ -319,15 +328,24 @@ class AppController(
         } catch (e: Exception) {
             return@withContext (e.message ?: e.toString())
         }
-        // A true here is authoritative even if the check below says otherwise — see
-        // FileSystemAdapter.copyDirectoryContents's doc for why that check isn't reliable for
-        // every destination. A false (or an adapter that hasn't been updated to verify its own
-        // copy) still falls through to it as a fallback.
-        val destSize = fs.sizeOfDirectory(dest)
-        when {
-            verifiedByAdapter || sourceSize == 0L || destSize > 0L -> null
-            else -> "origen $source: existe=${fs.exists(source)}, $sourceSize bytes; " +
-                "destino $dest: existe=${fs.exists(dest)}, $destSize bytes tras copiar"
+        // true/false here is authoritative either way — see FileSystemAdapter.copyDirectoryContents's
+        // doc for why the fallback size check below can't tell a false negative apart from a real
+        // failure (destPath can already be non-empty before the copy even starts). null is the only
+        // case that actually falls through to it.
+        when (verifiedByAdapter) {
+            true -> null
+            false -> "el proceso con privilegios (Shizuku) no pudo escribir en el destino — puede que " +
+                "la carpeta/archivo no tenga permiso de escritura de grupo (hace falta un chmod con " +
+                "root real para eso; Shizuku por sí solo no alcanza)"
+            null -> {
+                val destSize = fs.sizeOfDirectory(dest)
+                if (sourceSize == 0L || destSize > 0L) {
+                    null
+                } else {
+                    "origen $source: existe=${fs.exists(source)}, $sourceSize bytes; " +
+                        "destino $dest: existe=${fs.exists(dest)}, $destSize bytes tras copiar"
+                }
+            }
         }
     }
 

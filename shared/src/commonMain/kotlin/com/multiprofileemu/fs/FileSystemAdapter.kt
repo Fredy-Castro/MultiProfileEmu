@@ -17,15 +17,22 @@ interface FileSystemAdapter {
      * [onProgress] is called once before copying starts (with `filesDone = 0`, so the caller learns
      * the total immediately) and once after each file is copied.
      *
-     * Returns whether the implementation itself could verify the copy actually produced content
-     * (true if nothing needed copying in the first place). Callers should trust a `true` here over
-     * their own post-copy check of [sizeOfDirectory]: on Android, a copy that ran through a
-     * privileged helper process (see AndroidFileSystemAdapter/ShizukuBridge) can leave the calling
-     * app's own unprivileged view of the destination looking stale/nonexistent even though the
-     * write genuinely succeeded — confirmed on real hardware — so only that helper's own,
-     * same-process check can be relied on there.
+     * Returns a definite `true`/`false` when the implementation itself could verify whether the
+     * copy actually produced content, or `null` when it couldn't (the caller then has to fall back
+     * to its own post-copy check of [sizeOfDirectory], comparing it against [destPath]'s size
+     * *before* this call).
+     *
+     * Callers must trust a non-null result over their own fallback check — and *not* just treat
+     * `false` the same as `null`. Concretely, on Android, a copy that ran through a privileged
+     * helper process (see AndroidFileSystemAdapter/ShizukuBridge) returns a trustworthy `true`/
+     * `false` from that helper's own same-process check; but the fallback size comparison a caller
+     * would otherwise do is close to useless for it specifically — confirmed on real hardware that
+     * [destPath] can already be non-empty *before* the copy even starts (e.g. switching profiles
+     * always leaves the outgoing profile's old files sitting in the destination until the new
+     * ones overwrite them), so "destination is non-empty afterwards" stays true whether the write
+     * actually happened or silently failed and left the stale files untouched.
      */
-    fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (filesDone: Int, filesTotal: Int) -> Unit = { _, _ -> }): Boolean
+    fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (filesDone: Int, filesTotal: Int) -> Unit = { _, _ -> }): Boolean?
 
     fun sizeOfDirectory(path: String): Long
 

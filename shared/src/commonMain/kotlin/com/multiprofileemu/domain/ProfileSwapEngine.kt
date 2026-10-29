@@ -26,10 +26,39 @@ class ProfileSwapEngine(
     fun storagePathFor(groupId: String, profileId: String): String = storage.storagePath(groupId, profileId)
 
     /**
+     * Null on success, or a reason to treat the copy as a failure — same tri-state handling
+     * [AppController.mirrorDirectory] uses. `true`/`false` from [FileSystemAdapter.copyDirectoryContents]
+     * are both authoritative; only `null` (unverified) falls through to the source/dest-size
+     * fallback, which — unlike for a cloud-sync download into a folder that started out empty —
+     * [switchProfile]'s destination is essentially *never* empty beforehand (the outgoing
+     * profile's old files are still sitting there), so a `false` must never be treated the same
+     * as that fallback passing.
+     */
+    private fun copyFailureReason(verifiedByAdapter: Boolean?, sourcePath: String, destPath: String): String? =
+        when (verifiedByAdapter) {
+            true -> null
+            false -> "el proceso con privilegios (Shizuku) no pudo escribir ahí — puede que la carpeta/" +
+                "archivo no tenga permiso de escritura de grupo (hace falta chmod con root real para " +
+                "eso, Shizuku por sí solo no alcanza)"
+            null -> if (fs.sizeOfDirectory(sourcePath) == 0L || fs.sizeOfDirectory(destPath) > 0L) {
+                null
+            } else {
+                "el origen tiene contenido pero el destino quedó vacío tras copiar"
+            }
+        }
+
+    /**
      * Switches [group]'s active save folder to [targetProfileId]'s content.
      *
      * Safety: if another profile is currently active, its content is copied back into its
      * own storage *before* the active folder is cleared, so switching away never loses data.
+     *
+     * Both copies below are checked via [copyFailureReason] — confirmed on real hardware that the
+     * *incoming* one specifically can silently touch nothing at all when the active folder lives
+     * inside another app's Android/data and that app created its files without group-write
+     * permission (not even Shizuku's shell-level access can override that, only root could);
+     * without this check, the switch would report success while the real folder keeps the
+     * outgoing profile's content.
      */
     fun switchProfile(
         group: SaveGroup,
@@ -46,16 +75,22 @@ class ProfileSwapEngine(
             val outgoingPath = storage.storagePath(group.id, outgoingId)
             fs.ensureDirectory(outgoingPath)
             fs.clearDirectoryContents(outgoingPath)
-            fs.copyDirectoryContents(activePath, outgoingPath) { done, total ->
+            val backedUp = fs.copyDirectoryContents(activePath, outgoingPath) { done, total ->
                 onProgress(OperationProgress(OperationPhase.BACKING_UP_OUTGOING, done.toLong(), total.toLong()))
+            }
+            copyFailureReason(backedUp, activePath, outgoingPath)?.let { reason ->
+                error("No se pudo respaldar el perfil que estaba activo antes de cambiar ($reason) — se canceló el cambio para no perder su progreso.")
             }
         }
 
         val targetPath = storage.storagePath(group.id, targetProfileId)
         fs.ensureDirectory(targetPath)
         fs.clearDirectoryContents(activePath)
-        fs.copyDirectoryContents(targetPath, activePath) { done, total ->
+        val restored = fs.copyDirectoryContents(targetPath, activePath) { done, total ->
             onProgress(OperationProgress(OperationPhase.RESTORING_INCOMING, done.toLong(), total.toLong()))
+        }
+        copyFailureReason(restored, targetPath, activePath)?.let { reason ->
+            error("No se pudo escribir el perfil en la carpeta activa ($reason).")
         }
 
         val now = currentEpochMillis()

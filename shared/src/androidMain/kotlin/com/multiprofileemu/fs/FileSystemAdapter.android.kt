@@ -142,7 +142,7 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         }
     }
 
-    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean {
+    override fun copyDirectoryContents(sourcePath: String, destPath: String, onProgress: (Int, Int) -> Unit): Boolean? {
         val sourceIsSaf = isSafPath(sourcePath)
         val destIsSaf = isSafPath(destPath)
         // Plain java.io.File can create a new file inside our own sandbox or an existing SAF
@@ -160,21 +160,21 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
             }
         }
         ensureDirectory(destPath)
-        // false, not true, for every branch below: none of them verify their own result the way
-        // ShizukuBridge's does, so the caller's own post-copy size check (see
+        // null, not a real boolean, for every branch below: none of them verify their own result
+        // the way ShizukuBridge's does, so the caller's own post-copy size check (see
         // FileSystemAdapter.copyDirectoryContents's doc) is what actually catches a failure here,
         // exactly as before this method started returning anything.
         when {
             sourceIsSaf && destIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return false }
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return false }
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return null }
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return null }
                 val total = countFilesInDoc(source)
                 var done = 0
                 onProgress(0, total)
                 copyDocToDoc(source, dest) { done++; onProgress(done, total) }
             }
             sourceIsSaf -> {
-                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return false }
+                val source = resolveSafDoc(sourcePath, createMissingDirs = false) ?: run { onProgress(0, 0); return null }
                 val total = countFilesInDoc(source)
                 var done = 0
                 onProgress(0, total)
@@ -182,8 +182,8 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
             }
             destIsSaf -> {
                 val source = File(sourcePath)
-                if (!source.exists()) { onProgress(0, 0); return false }
-                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return false }
+                if (!source.exists()) { onProgress(0, 0); return null }
+                val dest = resolveSafDoc(destPath, createMissingDirs = true) ?: run { onProgress(0, 0); return null }
                 val total = source.listFiles()?.sumOf { countFilesInFile(it) } ?: 0
                 var done = 0
                 onProgress(0, total)
@@ -191,14 +191,14 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
             }
             else -> {
                 val source = File(sourcePath)
-                if (!source.exists()) { onProgress(0, 0); return false }
+                if (!source.exists()) { onProgress(0, 0); return null }
                 val total = countFilesInFile(source)
                 var done = 0
                 onProgress(0, total)
                 copyFileToFile(source, File(destPath)) { done++; onProgress(done, total) }
             }
         }
-        return false
+        return null
     }
 
     /**

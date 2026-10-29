@@ -101,6 +101,7 @@ fun GroupDetailScreen(
 
     var pendingDialog by remember { mutableStateOf<DetailDialog?>(null) }
     var cloudSyncError by remember { mutableStateOf<String?>(null) }
+    var profileActionError by remember { mutableStateOf<String?>(null) }
 
     fun focusedRowActionCount(): Int {
         val profile = currentGroup.value.profiles.getOrNull(focus.focusedIndex) ?: return 0
@@ -142,7 +143,9 @@ fun GroupDetailScreen(
                         val rowActions = actionsForProfile(profile.id == liveGroup.activeProfileId, supportsCloudSync)
                         when (rowActions.getOrNull(focusedActionIndex)) {
                             ProfileAction.SWITCH ->
-                                if (liveGroup.activeProfileId != null) controller.switchProfile(liveGroup.id, profile.id)
+                                if (liveGroup.activeProfileId != null) {
+                                    profileActionError = controller.switchProfile(liveGroup.id, profile.id)
+                                }
                             ProfileAction.SYNC -> controller.syncActiveToProfile(liveGroup.id, profile.id)
                             ProfileAction.CLOUD_SYNC -> pendingDialog = DetailDialog.CloudSync(profile)
                             ProfileAction.RENAME -> pendingDialog = DetailDialog.RenameProfile(profile)
@@ -190,6 +193,10 @@ fun GroupDetailScreen(
                 ErrorBanner(message = error, onDismiss = { cloudSyncError = null })
             }
 
+            profileActionError?.let { error ->
+                ErrorBanner(message = error, onDismiss = { profileActionError = null })
+            }
+
             if (group.profiles.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Todavía no hay perfiles en este grupo.")
@@ -205,7 +212,7 @@ fun GroupDetailScreen(
                             focusedActionIndex = if (rowFocused) focusedActionIndex else -1,
                             switchEnabled = group.activeProfileId != null,
                             supportsCloudSync = supportsCloudSync,
-                            onSwitch = { scope.launch { controller.switchProfile(group.id, profile.id) } },
+                            onSwitch = { scope.launch { profileActionError = controller.switchProfile(group.id, profile.id) } },
                             onSync = { scope.launch { controller.syncActiveToProfile(group.id, profile.id) } },
                             onCloudSync = { pendingDialog = DetailDialog.CloudSync(profile) },
                             onRename = { pendingDialog = DetailDialog.RenameProfile(profile) },
