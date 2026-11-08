@@ -181,6 +181,19 @@ class AppController(
         force: Boolean = false,
         persistConfig: (List<SaveGroup>, CloudSyncConfig) -> List<SaveGroup>,
     ): String? {
+        // UPLOAD's "rclone sync localPath remote" deletes anything on the remote that isn't in
+        // localPath — by design, and correct when localPath genuinely has nothing new. But an
+        // empty localPath here almost never means that: confirmed on real hardware that it can
+        // happen with real content still sitting in the real folder, e.g. this process's own
+        // unprivileged view of a path a privileged (Shizuku) write just touched reading back
+        // empty/stale — and in that case this would otherwise wipe the entire remote to match a
+        // folder that was never actually empty. DOWNLOAD/BISYNC need no such guard: an empty
+        // local source there is the normal first-run case (nothing to restore/merge from yet).
+        if (config.mode == CloudSyncMode.UPLOAD && withContext(Dispatchers.IO) { fs.sizeOfDirectory(localPath) } == 0L) {
+            return "La carpeta local a subir está vacía — se canceló la subida para no borrar todo " +
+                "lo que ya había en el remoto. Si es la primera vez, asegurate de tener contenido " +
+                "ahí antes de subir."
+        }
         val resync = config.mode == CloudSyncMode.BISYNC && !config.everResynced
         val error = cloudSyncEngine.sync(
             localPath = localPath,

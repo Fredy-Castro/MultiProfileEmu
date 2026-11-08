@@ -153,7 +153,19 @@ class AndroidFileSystemAdapter(private val context: Context) : FileSystemAdapter
         // process has no SAF grant of its own, so a SAF source has to be resolved to its real path
         // first (profile snapshots end up SAF-encoded whenever the data home itself lives on a SAF
         // folder, e.g. an SD card — this isn't only a cloud-sync-staging thing).
-        if (!destIsSaf && isForeignAppStoragePath(destPath) && ShizukuBridge.hasPermission()) {
+        //
+        // Also routes a *read* from a foreign Android/data path through Shizuku, not just a write
+        // into one — confirmed on real hardware that this process's own (unprivileged) view of
+        // such a path can still read back empty/stale immediately after Shizuku's privileged
+        // process just wrote to it (e.g. right after a cloud download writes the real save file
+        // back): listFiles()/length() silently saw nothing, so the very next upload's "copy the
+        // real folder into the staging area" step produced an empty staging folder — and
+        // `rclone sync` from an empty source deleted everything on the remote to match it. Only
+        // Shizuku's own same-process check is trustworthy for a path it (or this cache quirk)
+        // might have just touched.
+        val sourceForeign = !sourceIsSaf && isForeignAppStoragePath(sourcePath)
+        val destForeign = !destIsSaf && isForeignAppStoragePath(destPath)
+        if ((sourceForeign || destForeign) && ShizukuBridge.hasPermission()) {
             val realSourcePath = if (sourceIsSaf) resolveSafPathToReal(sourcePath) else sourcePath
             if (realSourcePath != null) {
                 return copyViaShizuku(realSourcePath, destPath, onProgress)
